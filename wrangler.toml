@@ -2,7 +2,7 @@ name = "quatt-openheatpumps-nl-reverse-proxy"
 main = "src/index.ts"
 compatibility_date = "2026-09-29"
 
-# Bind the Durable Object correctly for the Cloudflare Free Plan
+# Bind the Durable Object correctly for the Cloudflare Free Plan (Section 4)
 [[durable_objects.bindings]]
 name = "TUNNEL_REGISTRY"
 class_name = "TunnelRegistry"
