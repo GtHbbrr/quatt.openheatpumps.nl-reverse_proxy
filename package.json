@@ -1,0 +1,19 @@
+{
+  "name": "quatt.openheatpumps.nl-reverse_proxy",
+  "version": "1.0.0",
+  "description": "Experimental proof of concept: a Cloudflare Worker + Durable Object that relays HTTP requests from a phone browser to an OpenQuatt heat pump over a single outbound WebSocket opened by the device.",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "wrangler": "^4.47.0"
+  }
+}
