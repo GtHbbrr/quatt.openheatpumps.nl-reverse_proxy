@@ -123,7 +123,7 @@ export default {
                   
                   let debugExplain = "<strong>Mogelijke oorzaken:</strong><br>";
                   if (res.status === 503 || errText.includes("offline")) {
-                    debugExplain += "<strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment géén actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
+                    debugExplain += "<strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment geen actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
                   } else if (res.status === 401) {
                     debugExplain += "<strong>Unauthorized (401):</strong> De ESP32 probeert wel te verbinden, maar de Bearer Authorization token matcht niet met de SHA-256 routering.<br>";
                   } else {
@@ -137,7 +137,7 @@ export default {
                 apiDetail.innerText = "Netwerkfout bij het aanroepen van de API.";
                 stepResult.style.display = "block";
                 stepResult.className = "step fail";
-                resultTitle.innerText = "❌ Exception Gevangen";
+                resultTitle.innerText = "Exception Gevangen";
                 resultText.innerText = err.message;
               });
             }
