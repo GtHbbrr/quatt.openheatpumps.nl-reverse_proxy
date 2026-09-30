@@ -51,7 +51,7 @@ export default {
         </head>
         <body>
           <div class="card">
-            <h2>🔗 OpenQuatt Stateless Pairing Inspecteur</h2>
+            <h2>OpenQuatt Stateless Pairing Inspecteur</h2>
             
             <div id="step-hash" class="step active">
               <strong>Stap 1: URL Hash-fragment controleren</strong>
@@ -105,7 +105,7 @@ export default {
                   
                   stepResult.style.display = "block";
                   stepResult.className = "step success";
-                  resultTitle.innerText = "🎉 Koppeling Geslaagd!";
+                  resultTitle.innerText = "Koppeling Geslaagd!";
                   resultText.innerText = "U bent succesvol stateless gekoppeld via de beveiligde oq_pump cookie. U wordt binnen 2 seconden automatisch doorstuur naar de live-interface...";
                   
                   setTimeout(() => { window.location.href = "/"; }, 2000);
@@ -119,15 +119,15 @@ export default {
                   
                   stepResult.style.display = "block";
                   stepResult.className = "step fail";
-                  resultTitle.innerText = "❌ Koppeling Mislukt";
+                  resultTitle.innerText = "Koppeling Mislukt";
                   
                   let debugExplain = "<strong>Mogelijke oorzaken:</strong><br>";
                   if (res.status === 503 || errText.includes("offline")) {
-                    debugExplain += "• <strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment géén actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
+                    debugExplain += "<strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment géén actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
                   } else if (res.status === 401) {
-                    debugExplain += "• <strong>Unauthorized (401):</strong> De ESP32 probeert wel te verbinden, maar de Bearer Authorization token matcht niet met de SHA-256 routering.<br>";
+                    debugExplain += "<strong>Unauthorized (401):</strong> De ESP32 probeert wel te verbinden, maar de Bearer Authorization token matcht niet met de SHA-256 routering.<br>";
                   } else {
-                    debugExplain += "• <strong>Serverfout:</strong> " + errText + "<br>";
+                    debugExplain += "<strong>Serverfout:</strong> " + errText + "<br>";
                   }
                   debugExplain += "<br><small style=\x27color:#666;\x27>Raw Server Response:</small><br><pre>" + (typeof jsonDetail === "object" ? JSON.stringify(jsonDetail, null, 2) : errText) + "</pre>";
                   resultText.innerHTML = debugExplain;
