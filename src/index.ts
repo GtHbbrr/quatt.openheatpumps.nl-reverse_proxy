@@ -32,26 +32,113 @@ export default {
       const html = `
         <!DOCTYPE html>
         <html>
-        <head><title>OpenQuatt Pairing</title></head>
+        <head>
+          <title>OpenQuatt Pairing Debugger</title>
+          <style>
+            body { font-family: sans-serif; padding: 20px; line-height: 1.5; background: #f4f6f9; color: #333; }
+            .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); max-width: 600px; margin: 0 auto; }
+            h2 { color: #0288d1; margin-top: 0; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }
+            .step { margin: 15px 0; padding: 10px; border-left: 4px solid #b0bec5; background: #fafafa; }
+            .step.active { border-left-color: #0288d1; background: #e1f5fe; }
+            .step.success { border-left-color: #2e7d32; background: #e8f5e9; }
+            .step.fail { border-left-color: #c62828; background: #ffebee; }
+            pre { background: #263238; color: #eceff1; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; }
+            .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; color: white; }
+            .badge.blue { background: #0288d1; }
+            .badge.red { background: #c62828; }
+            .badge.green { background: #2e7d32; }
+          </style>
+        </head>
         <body>
-          <h2>OpenQuatt Koppelen</h2>
-          <p id="status">Koppelen initialiseren...</p>
+          <div class="card">
+            <h2>🔗 OpenQuatt Stateless Pairing Inspecteur</h2>
+            
+            <div id="step-hash" class="step active">
+              <strong>Stap 1: URL Hash-fragment controleren</strong>
+              <div id="hash-detail" style="margin-top: 5px; font-size: 0.9rem;">Uitlezen van URL postfix fragment...</div>
+            </div>
+
+            <div id="step-api" class="step">
+              <strong>Stap 2: POST Verzoek naar /api/pair</strong>
+              <div id="api-detail" style="margin-top: 5px; font-size: 0.9rem;">Wacht op Stap 1...</div>
+            </div>
+
+            <div id="step-result" class="step" style="display:none;">
+              <strong id="result-title">Eindstatus</strong>
+              <p id="result-text" style="font-size: 0.95rem; margin: 5px 0 0 0;"></p>
+            </div>
+          </div>
+
           <script>
+            const stepHash = document.getElementById("step-hash");
+            const hashDetail = document.getElementById("hash-detail");
+            const stepApi = document.getElementById("step-api");
+            const apiDetail = document.getElementById("api-detail");
+            const stepResult = document.getElementById("step-result");
+            const resultTitle = document.getElementById("result-title");
+            const resultText = document.getElementById("result-text");
+
+            // 1. Extraheer de secret uit de URL postfix hash
             const secret = window.location.hash.substring(1);
+            
             if (!secret) {
-              document.getElementById("status").innerText = "Geen secret gevonden in URL fragment.";
+              stepHash.className = "step fail";
+              hashDetail.innerHTML = "<span class=\x27badge red\x27>Fout</span> Geen secret gevonden in URL fragment na de hashtag (#).<br><em>Zorg dat de openquatt.local redirect de URL opbouwt als /pair#XYZ</em>";
+              stepApi.className = "step fail";
+              apiDetail.innerText = "POST afgebroken wegens missend geheim.";
             } else {
+              stepHash.className = "step success";
+              hashDetail.innerHTML = "<span class=\x27badge green\x27>OK</span> Secret succesvol gedetecteerd uit URL postfix!<br><strong>Gelezen geheim (Vluchtig RAM ID):</strong> <code>" + secret + "</code>";
+              
+              // 2. Start de POST aanroep naar het Cloudflare API-endpoint
+              stepApi.className = "step active";
+              apiDetail.innerHTML = "Verzoek versturen naar <code>POST /api/pair</code> met payload:<br><pre>" + JSON.stringify({ secret: secret }, null, 2) + "</pre><em>De Cloudflare Worker verifieert nu of het Durable Object online is via een status-check...</em>";
+
               fetch("/api/pair", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ secret })
-              }).then(res => {
+              }).then(async res => {
                 if (res.ok) {
-                  document.getElementById("status").innerText = "Succesvol gekoppeld! U wordt doorgestuurd...";
+                  stepApi.className = "step success";
+                  apiDetail.innerHTML = "<span class=\x27badge green\x27>Status " + res.status + " OK</span> Cookie succesvol geaccepteerd en gezet door Cloudflare backend!";
+                  
+                  stepResult.style.display = "block";
+                  stepResult.className = "step success";
+                  resultTitle.innerText = "🎉 Koppeling Geslaagd!";
+                  resultText.innerText = "U bent succesvol stateless gekoppeld via de beveiligde oq_pump cookie. U wordt binnen 2 seconden automatisch doorstuur naar de live-interface...";
+                  
                   setTimeout(() => { window.location.href = "/"; }, 2000);
                 } else {
-                  document.getElementById("status").innerText = "Koppelen mislukt. Is de warmtepomp online?";
+                  stepApi.className = "step fail";
+                  const errText = await res.text().catch(() => "Geen platte tekst response.");
+                  let jsonDetail = {};
+                  try { jsonDetail = JSON.parse(errText); } catch(e) {}
+
+                  apiDetail.innerHTML = "<span class=\x27badge red\x27>Fout: Status " + res.status + "</span> De Cloudflare API weigerde de koppeling.";
+                  
+                  stepResult.style.display = "block";
+                  stepResult.className = "step fail";
+                  resultTitle.innerText = "❌ Koppeling Mislukt";
+                  
+                  let debugExplain = "<strong>Mogelijke oorzaken:</strong><br>";
+                  if (res.status === 503 || errText.includes("offline")) {
+                    debugExplain += "• <strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment géén actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
+                  } else if (res.status === 401) {
+                    debugExplain += "• <strong>Unauthorized (401):</strong> De ESP32 probeert wel te verbinden, maar de Bearer Authorization token matcht niet met de SHA-256 routering.<br>";
+                  } else {
+                    debugExplain += "• <strong>Serverfout:</strong> " + errText + "<br>";
+                  }
+                  debugExplain += "<br><small style=\x27color:#666;\x27>Raw Server Response:</small><br><pre>" + (typeof jsonDetail === "object" ? JSON.stringify(jsonDetail, null, 2) : errText) + "</pre>";
+                  resultText.innerHTML = debugExplain;
                 }
+              }).catch(err => {
+                stepApi.className = "step fail";
+                apiDetail.innerText = "Netwerkfout bij het aanroepen van de API.";
+                stepResult.style.display = "block";
+                stepResult.className = "step fail";
+                resultTitle.innerText = "❌ Exception Gevangen";
+                resultText.innerText = err.message;
               });
             }
           </script>
