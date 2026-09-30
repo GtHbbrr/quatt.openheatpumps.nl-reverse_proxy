@@ -97,6 +97,51 @@ export default {
       return new Response("Niet gekoppeld. Gebruik de lokale openquatt.local interface om uw toestel te koppelen.", { status: 401 });
     }
 
+    const cookies = parseCookies(cookieHeader);
+    const secret = cookies["oq_pump"];
+    
+    if (!secret) {
+      const allHeaders = JSON.stringify(Object.fromEntries(request.headers.entries()), null, 2);
+      const debugHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>OpenQuatt Proxy Debug</title>
+          <style>
+            body { font-family: sans-serif; padding: 20px; line-height: 1.5; background: #f9f9f9; color: #333; }
+            .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }
+            h2 { color: #d32f2f; margin-top: 0; }
+            pre { background: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; }
+            .meta { font-size: 0.9rem; color: #666; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>🔒 Toegang Geweigerd (401 Unauthorized)</h2>
+            <p><strong>Status:</strong> Niet gekoppeld. Gebruik de lokale <code>openquatt.local</code> interface om uw toestel te koppelen.</p>
+            
+            <hr>
+            <h3>🕵️ Buitenshuis Debug Informatie</h3>
+            <p class="meta">De Cloudflare Worker heeft gezocht naar de cookie <code>oq_pump</code>, maar deze is niet meegezonden door uw browser.</p>
+            
+            <p><strong>Gevonden Cookies:</strong></p>
+            <pre>${cookieHeader ? escapeHtml(cookieHeader) : "<i>(Geen cookies aanwezig)</i>"}</pre>
+            
+            <p><strong>Inkomende HTTP Headers:</strong></p>
+            <pre>${escapeHtml(allHeaders)}</pre>
+            
+            <p class="meta"><em>Tip: Schakel de switch op openquatt.local een keer UIT en AAN om de koppelings-cookie opnieuw via de /pair# postfix te genereren.</em></p>
+          </div>
+        </body>
+        </html>
+      `;
+      return new Response(debugHtml, { status: 401, headers: { "Content-Type": "text/html" } });
+    }
+
+    function escapeHtml(str: string): string {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\x27/g, "&#x27;");
+    }
+    
     const routeId = await computeRouteId(secret);
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
