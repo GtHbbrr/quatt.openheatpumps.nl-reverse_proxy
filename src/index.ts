@@ -91,12 +91,6 @@ export default {
       return new Response("Method Not Allowed (Tunnel is Read-Only)", { status: 405 });
     }
 
-    const cookies = parseCookies(request.headers.get("Cookie"));
-    const secret = cookies["oq_pump"];
-    if (!secret) {
-      return new Response("Niet gekoppeld. Gebruik de lokale openquatt.local interface om uw toestel te koppelen.", { status: 401 });
-    }
-
     const cookies = parseCookies(cookieHeader);
     const secret = cookies["oq_pump"];
     
