@@ -101,13 +101,13 @@ export default {
               }).then(async res => {
                 if (res.ok) {
                   stepApi.className = "step success";
-                  apiDetail.innerHTML = "<span class=\x27badge green\x27>Status " + res.status + " OK</span> Cookie succesvol geaccepteerd en gezet door Cloudflare backend!";
-                  
+                  apiDetail.innerHTML = "<span class='badge green'>Status " + res.status + " OK</span> Stateless cookie succesvol geactiveerd!";
                   stepResult.style.display = "block";
                   stepResult.className = "step success";
-                  resultTitle.innerText = "Koppeling Geslaagd!";
-                  resultText.innerText = "U bent succesvol stateless gekoppeld via de beveiligde oq_pump cookie. U wordt binnen 2 seconden automatisch doorstuur naar de live-interface...";
-                  
+                  resultTitle.innerText = "🎉 Koppeling Geslaagd!";
+                  resultText.innerHTML = "U bent succesvol stateless verbonden via de beveiligde oq_pump cookie.<br>U wordt binnen 2 seconden automatisch doorstuur naar de live-interface van uw warmtepomp...";
+                  setTimeout(() => { window.location.href = window.location.origin + "/"; }, 2000);
+                } else {
                   setTimeout(() => { window.location.href = "/"; }, 2000);
                 } else {
                   stepApi.className = "step fail";
@@ -178,6 +178,7 @@ export default {
       return new Response("Method Not Allowed (Tunnel is Read-Only)", { status: 405 });
     }
 
+    const cookieHeader = request.headers.get("Cookie") || "";
     const cookies = parseCookies(cookieHeader);
     const secret = cookies["oq_pump"];
     
