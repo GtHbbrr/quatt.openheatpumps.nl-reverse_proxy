@@ -177,7 +177,6 @@ export default {
     }
 
     const cookieHeader = request.headers.get("Cookie") || "";
-    const cookieHeader = request.headers.get("Cookie") || "";
     const cookies = parseCookies(cookieHeader);
     const secret = cookies["oq_pump"];
     
