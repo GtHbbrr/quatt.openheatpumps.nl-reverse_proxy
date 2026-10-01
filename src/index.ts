@@ -21,6 +21,9 @@ export default {
       }
       const pumpSecret = authHeader.substring(7).trim();
       const routeId = await computeRouteId(pumpSecret);
+      console.log("=== WEBSOCKET HANDSHAKE ===");
+      console.log("Ontvangen token van ESP32 (Lengte:", pumpSecret.length, "):", pumpSecret);
+      console.log("Berekende routeId hash voor ESP32:", routeId);
 
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
@@ -151,6 +154,9 @@ export default {
       try {
         const body: { secret: string } = await request.json();
         const routeId = await computeRouteId(body.secret);
+        console.log("=== API PAIR REQUEST ===");
+        console.log("Ontvangen token van Mobiel (Lengte:", body.secret.length, "):", body.secret);
+        console.log("Berekende routeId hash voor Mobiel:", routeId);
         
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
