@@ -226,7 +226,28 @@ export default {
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
-    return stub.fetch(request);
+    console.log("==> PROXY FETCH: Inkomend HTTP-verzoek ontvangen voor route:", routeId);
+    console.log("Method:", request.method, "URL:", request.url);
+    
+    try {
+      const response = await stub.fetch(request);
+      console.log("<== PROXY RESPONSE: Durable Object antwoordde met HTTP status:", response.status);
+      
+      if (response.status === 503) {
+        console.error("🚨 CRITICAL: Durable Object retourneerde een 503! De WebSocket-pijplijn naar de ESP32 is waarschijnlijk abrupt afgebroken tijdens de data-overdracht.");
+      }
+      return response;
+    } catch (doError: any) {
+      console.error("🚨 FATAL DO CRASH: stub.fetch(request) gooide een runtime-exception!");
+      console.error("• Foutmelding:", doError.message);
+      console.error("• Stacktrace:", doError.stack || "Geen stacktrace beschikbaar");
+      
+      return new Response(JSON.stringify({
+        error: "Durable Object Ingress Failure",
+        message: doError.message,
+        stack: doError.stack
+      }), { status: 502, headers: { "Content-Type": "application/json" } });
+    }
   }
 };
 
