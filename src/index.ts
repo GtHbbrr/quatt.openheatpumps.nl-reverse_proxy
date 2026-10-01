@@ -108,8 +108,6 @@ export default {
                   resultText.innerHTML = "U bent succesvol stateless verbonden via de beveiligde oq_pump cookie.<br>U wordt binnen 2 seconden automatisch doorstuur naar de live-interface van uw warmtepomp...";
                   setTimeout(() => { window.location.href = window.location.origin + "/"; }, 2000);
                 } else {
-                  setTimeout(() => { window.location.href = "/"; }, 2000);
-                } else {
                   stepApi.className = "step fail";
                   const errText = await res.text().catch(() => "Geen platte tekst response.");
                   let jsonDetail = {};
@@ -178,6 +176,7 @@ export default {
       return new Response("Method Not Allowed (Tunnel is Read-Only)", { status: 405 });
     }
 
+    const cookieHeader = request.headers.get("Cookie") || "";
     const cookieHeader = request.headers.get("Cookie") || "";
     const cookies = parseCookies(cookieHeader);
     const secret = cookies["oq_pump"];
