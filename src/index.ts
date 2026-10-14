@@ -160,7 +160,7 @@ export default {
         
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
-        const checkOnline = await stub.fetch(new Request("http://local/status"));
+        const checkOnline = await stub.fetch(new Request("http://local/"));
         
         if (checkOnline.status !== 200) {
           return new Response("Device offline", { status: 503 });
