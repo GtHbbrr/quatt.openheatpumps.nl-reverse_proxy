@@ -11,7 +11,7 @@ export default {
 
     // 1. ESP32 verbindt via WSS naar /device (Sectie 4)
     if (url.pathname === "/device") {
-      if (request.headers.get("Upgrade") !== "websocket") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return new Response("Expected WebSocket", { status: 426 });
       }
 
