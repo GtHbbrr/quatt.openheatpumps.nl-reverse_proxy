@@ -108,7 +108,7 @@ export default {
                   stepResult.style.display = "block";
                   stepResult.className = "step success";
                   resultTitle.innerText = "🎉 Koppeling Geslaagd!";
-                  resultText.innerHTML = "U bent succesvol stateless verbonden via de beveiligde oq_pump cookie.<br>U wordt binnen 2 seconden automatisch doorstuur naar de live-interface van uw warmtepomp...";
+                  resultText.innerHTML = "U bent succesvol stateless verbonden via de beveiligde oq_pump cookie.<br>U wordt binnen 2 seconden automatisch doorstuur naar de live-interface van OpenQuatt...";
                   setTimeout(() => { window.location.href = window.location.origin + "/"; }, 2000);
                 } else {
                   stepApi.className = "step fail";
@@ -170,7 +170,7 @@ export default {
           }));
           console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status, checkOnline.statusText);
         } catch (fetchError: any) {
-          console.error("🚨 [DEBUG CRASH] stub.fetch() naar de warmtepomp mislukt op netwerklaag!");
+          console.error("🚨 [DEBUG CRASH] stub.fetch() naar de esp_websocket mislukt op netwerklaag!");
           console.error("• Fouttype:", fetchError.name);
           console.error("• Foutmelding:", fetchError.message);
           return new Response(JSON.stringify({ 
@@ -182,7 +182,7 @@ export default {
         
         if (checkOnline.status !== 200) {
           const rawPayload = await checkOnline.text().catch(() => "Geen payload");
-          console.error("🚨 [DEBUG REJECT] Warmtepomp weigert de check! HTTP Status:", checkOnline.status);
+          console.error("🚨 [DEBUG REJECT] esp_websocket weigert de check! HTTP Status:", checkOnline.status);
           console.error("• Inhoud van weigering:", rawPayload);
           return new Response(JSON.stringify({
             error: "Device rejected check",
