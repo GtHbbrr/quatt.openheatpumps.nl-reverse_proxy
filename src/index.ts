@@ -154,27 +154,52 @@ export default {
       try {
         const body: { secret: string } = await request.json();
         const routeId = await computeRouteId(body.secret);
-        console.log("=== API PAIR REQUEST ===");
-        console.log("Ontvangen token van Mobiel (Lengte:", body.secret.length, "):", body.secret);
-        console.log("Berekende routeId hash voor Mobiel:", routeId);
+        console.log("=== [DEBUG] START API PAIR FLOW ===");
+        console.log("• Mobiel Token:", body.secret);
+        console.log("• Berekende routeId:", routeId);
         
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
-        const checkOnline = await stub.fetch(new Request("http://openquatt.local", {
-          headers: { "Host": "openquatt.local" }
-        }));
-
+        
+        console.log("• [DEBUG] Versturen van Ingress Health Check naar Durable Object...");
+        
+        let checkOnline: Response;
+        try {
+          checkOnline = await stub.fetch(new Request("http://openquatt.local", {
+            headers: { "Host": "openquatt.local" }
+          }));
+          console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status, checkOnline.statusText);
+        } catch (fetchError: any) {
+          console.error("🚨 [DEBUG CRASH] stub.fetch() naar de warmtepomp mislukt op netwerklaag!");
+          console.error("• Fouttype:", fetchError.name);
+          console.error("• Foutmelding:", fetchError.message);
+          return new Response(JSON.stringify({ 
+            error: "Tunnel Fetch Exception", 
+            message: fetchError.message,
+            type: fetchError.name
+          }), { status: 502, headers: { "Content-Type": "application/json" } });
+        }
+        
         if (checkOnline.status !== 200) {
-          return new Response("Device offline", { status: 503 });
+          const rawPayload = await checkOnline.text().catch(() => "Geen payload");
+          console.error("🚨 [DEBUG REJECT] Warmtepomp weigert de check! HTTP Status:", checkOnline.status);
+          console.error("• Inhoud van weigering:", rawPayload);
+          return new Response(JSON.stringify({
+            error: "Device rejected check",
+            status: checkOnline.status,
+            payload: rawPayload
+          }), { status: 503, headers: { "Content-Type": "application/json" } });
         }
 
+        console.log("🎉 [DEBUG SUCCESS] Check geslaagd! Set-Cookie wordt afgegeven.");
         return new Response(JSON.stringify({ success: true }), {
           headers: {
             "Content-Type": "application/json",
             "Set-Cookie": `oq_pump=${body.secret}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`
           }
         });
-      } catch (e) {
+      } catch (e: any) {
+        console.error("🚨 [DEBUG FATAL] Algemene crash in pair endpoint:", e.message);
         return new Response("Bad Request", { status: 400 });
       }
     }
