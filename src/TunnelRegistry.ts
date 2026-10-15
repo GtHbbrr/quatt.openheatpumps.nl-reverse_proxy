@@ -9,6 +9,18 @@ export class TunnelRegistry implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    // WIRE PROTOCOL V2.0: REAL-TIME HEALTH STATUS ROUTE
+    if (url.pathname === "/device/check") {
+      const isOnline = this.deviceWs !== null && this.deviceWs !== undefined;
+      console.log(`窶｢ [DURABLE OBJECT STATUS] Live controle uitgevoerd. Status online: ${isOnline}`);
+      
+      if (!isOnline) {
+        return new Response("Device Offline", { status: 503 });
+      }
+      return new Response("Device Online", { status: 200 });
+    }
+
+
     if (url.pathname === "/status") {
       return new Response(this.deviceWs && this.isHandshaked ? "online" : "offline", {
         status: this.deviceWs && this.isHandshaked ? 200 : 503
