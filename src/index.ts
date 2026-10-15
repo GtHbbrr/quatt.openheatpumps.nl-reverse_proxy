@@ -20,11 +20,11 @@ export default {
     if (url.pathname === "/pair") {
       console.log("🔓 [PoC BYPASS] Paring cookie geactiveerd. Browser doorsturen naar de hoofdinterface...");
       
-      // We sturen een HTTP 302 Redirect terug naar de root (/) van de reverse proxy
+      // FIX: Gebruik url.origin in plaats van het niet-bestaande window.location object!
       return new Response("Redirecting...", {
         status: 302,
         headers: {
-          "Location": window.location.origin + "/",
+          "Location": url.origin + "/",
           "Set-Cookie": "oq_pump=poc-bypass-token; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000"
         }
       });
