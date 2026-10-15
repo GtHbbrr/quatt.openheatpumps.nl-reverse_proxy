@@ -27,7 +27,13 @@ export default {
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
 
-      return await stub.fetch(request);
+      // FIX: Routeer via http://local/device om de Durable Object WebSocket Upgrade te deblokkeren!
+      return await stub.fetch(new Request("http://local/device?token=" + pumpSecret, {
+        headers: request.headers,
+        webSocket: request.headers.get("Upgrade") ? request : undefined
+      }));
+    }
+
     }
 
     // ==============================================================================
