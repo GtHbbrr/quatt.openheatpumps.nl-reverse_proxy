@@ -10,24 +10,30 @@ export default {
     const url = new URL(request.url);
 
     // 1. ESP32 verbindt via WSS naar /device (Sectie 4)
+    // Moderne, flexibele Ingress handler voor de warmtepomp
     if (url.pathname === "/device") {
-      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
-        return new Response("Expected WebSocket", { status: 426 });
+      // Haal het token op uit de header OF uit de veilige query-parameter
+      const queryToken = url.searchParams.get("token");
+      const authHeader = request.headers.get("Authorization")?.replace("Bearer ", "");
+      const activeToken = queryToken || authHeader;
+
+      if (!activeToken) {
+        console.error("🚨 [WORKER REJECT] Geen authenticatietoken gevonden in header of query string.");
+        return new Response("Unauthorized: Missing token", { status: 401 });
       }
 
-      const authHeader = request.headers.get("Authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-      const pumpSecret = authHeader.substring(7).trim();
-      const routeId = await computeRouteId(pumpSecret);
-      console.log("=== WEBSOCKET HANDSHAKE ===");
-      console.log("Ontvangen token van ESP32 (Lengte:", pumpSecret.length, "):", pumpSecret);
-      console.log("Berekende routeId hash voor ESP32:", routeId);
-
+      console.log("🟢 [WORKER INGRESS] Geldige handdruk berekend voor token:", activeToken);
+      
+      const [client, server] = Object.values(new WebSocketPair());
+      const routeId = await computeRouteId(activeToken);
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
-      return stub.fetch(request);
+
+      // Sla de socket op in het Durable Object via de fetch-route
+      return await stub.fetch(new Request("http://local/register-device", {
+        headers: { "Upgrade": "websocket" },
+        webSocket: client
+      }));
     }
 
     // 2. Pairing flow (/pair#<secret>) (Sectie 10)
