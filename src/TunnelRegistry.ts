@@ -29,9 +29,42 @@ export class TunnelRegistry implements DurableObject {
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    // VERVANG HET GENERIEKE GEBLOKKEERDE BLOK DOOR DIEPE DIAGNOSTICS
     if (!this.deviceWs || !this.isHandshaked) {
-      return new Response("Warmtepomp is momenteel offline", { status: 503 });
+      const hasSocket = this.deviceWs !== null && this.deviceWs !== undefined;
+      let nativeState = "UNKNOWN";
+      if (hasSocket) {
+        try {
+          // Haal de native W3C WebSocket status op (0=Connecting, 1=Open, 2=Closing, 3=Closed)
+          nativeState = String(this.deviceWs.readyState);
+        } catch (e: any) {
+          nativeState = `ERROR: ${e.message}`;
+        }
+      }
+
+      console.error("🚨 [DURABLE OBJECT REJECT] Ingress check geweigerd wegens incomplete protocol-handshake.");
+      console.error(`  • WebSocket aanwezig in Cloud RAM: ${hasSocket}`);
+      console.error(`  • Native WebSocket ReadyState: ${nativeState}`);
+      console.error(`  • Protocol Handshake Voltooid (isHandshaked): ${this.isHandshaked}`);
+      console.error(`  • Aangevraagd Pad: ${url.pathname}`);
+
+      return new Response(JSON.stringify({
+        error: "Durable Object Ingress Handshake Incomplete",
+        cloud_metadata: {
+          has_active_websocket: hasSocket,
+          websocket_native_ready_state: nativeState,
+          protocol_handshake_completed: this.isHandshaked,
+          pending_requests_count: this.pendingRequests.size,
+          durable_object_id: this.state.id.toString(),
+          timestamp_ns: String(Date.now() * 1000000),
+          request_url: request.url
+        }
+      }), { 
+        status: 503, 
+        headers: { "Content-Type": "application/json" } 
+      });
     }
+
 
     const streamId = this.nextStreamId++;
     const allowedHeaders = ['accept', 'accept-encoding', 'accept-language', 'if-none-match', 'if-modified-since', 'user-agent'];
