@@ -9,38 +9,30 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // 1. ESP32 verbindt via WSS naar /device (Sectie 4)
     // ==============================================================================
     // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING
     // ==============================================================================
     if (url.pathname === "/device") {
-      // Extraheer het token case-insensitive uit de URL query string (v2.0 Standaard)
       const queryToken = url.searchParams.get("token");
-      // Fallback voor eventuele legacy v1 headers
       const authHeader = request.headers.get("Authorization")?.replace("Bearer ", "");
-      
       const pumpSecret = queryToken || authHeader;
 
       if (!pumpSecret) {
-        console.error("🚨 [WORKER REJECT] Ingress geweigerd: Geen authenticatietoken gevonden in query string of header.");
+        console.error("🚨 [WORKER REJECT] Ingress geweigerd: Geen token gevonden.");
         return new Response("Unauthorized: Missing token parameter", { status: 401 });
       }
 
       console.log("🟢 [WORKER INGRESS] WebSocket handdruk gestart voor token:", pumpSecret);
-      
-      // Bereken de cryptografische routeId hash (Sectie 2 & 3)
       const routeId = await computeRouteId(pumpSecret);
-      console.log("• Berekende routeId hash voor Device:", routeId);
-
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
 
-      // Sla de WebSocket-sessie op in het Durable Object
       return await stub.fetch(request);
     }
 
-
-    // 2. Pairing flow (/pair#<secret>) (Sectie 10)
+    // ==============================================================================
+    // 2. PAIRING FLOW HTML VIEW (SECTIE 10)
+    // ==============================================================================
     if (url.pathname === "/pair") {
       const html = `
         <!DOCTYPE html>
@@ -57,55 +49,36 @@ export default {
             .step.fail { border-left-color: #c62828; background: #ffebee; }
             pre { background: #263238; color: #eceff1; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; }
             .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; color: white; }
-            .badge.blue { background: #0288d1; }
-            .badge.red { background: #c62828; }
             .badge.green { background: #2e7d32; }
+            .badge.red { background: #c62828; }
           </style>
         </head>
         <body>
           <div class="card">
             <h2>OpenQuatt Stateless Pairing Inspecteur</h2>
-            
             <div id="step-hash" class="step active">
               <strong>Stap 1: URL Hash-fragment controleren</strong>
               <div id="hash-detail" style="margin-top: 5px; font-size: 0.9rem;">Uitlezen van URL postfix fragment...</div>
             </div>
-
             <div id="step-api" class="step">
               <strong>Stap 2: POST Verzoek naar /api/pair</strong>
               <div id="api-detail" style="margin-top: 5px; font-size: 0.9rem;">Wacht op Stap 1...</div>
             </div>
-
             <div id="step-result" class="step" style="display:none;">
               <strong id="result-title">Eindstatus</strong>
               <p id="result-text" style="font-size: 0.95rem; margin: 5px 0 0 0;"></p>
             </div>
           </div>
-
           <script>
-            const stepHash = document.getElementById("step-hash");
-            const hashDetail = document.getElementById("hash-detail");
-            const stepApi = document.getElementById("step-api");
-            const apiDetail = document.getElementById("api-detail");
-            const stepResult = document.getElementById("step-result");
-            const resultTitle = document.getElementById("result-title");
-            const resultText = document.getElementById("result-text");
-
-            // 1. Extraheer de secret uit de URL postfix hash
             const secret = window.location.hash.substring(1);
-            
             if (!secret) {
-              stepHash.className = "step fail";
-              hashDetail.innerHTML = "<span class=\x27badge red\x27>Fout</span> Geen secret gevonden in URL fragment na de hashtag (#).<br><em>Zorg dat de openquatt.local redirect de URL opbouwt als /pair#XYZ</em>";
-              stepApi.className = "step fail";
-              apiDetail.innerText = "POST afgebroken wegens missend geheim.";
+              document.getElementById("step-hash").className = "step fail";
+              document.getElementById("hash-detail").innerHTML = "<span class='badge red'>Fout</span> Geen secret gevonden.";
             } else {
-              stepHash.className = "step success";
-              hashDetail.innerHTML = "<span class=\x27badge green\x27>OK</span> Secret succesvol gedetecteerd uit URL postfix!<br><strong>Gelezen geheim (Vluchtig RAM ID):</strong> <code>" + secret + "</code>";
-              
-              // 2. Start de POST aanroep naar het Cloudflare API-endpoint
-              stepApi.className = "step active";
-              apiDetail.innerHTML = "Verzoek versturen naar <code>POST /api/pair</code> met payload:<br><pre>" + JSON.stringify({ secret: secret }, null, 2) + "</pre><em>De Cloudflare Worker verifieert nu of het Durable Object online is via een status-check...</em>";
+              document.getElementById("step-hash").className = "step success";
+              document.getElementById("hash-detail").innerHTML = "<span class='badge green'>OK</span> Secret gedetecteerd: <code>" + secret + "</code>";
+              document.getElementById("step-api").className = "step active";
+              document.getElementById("api-detail").innerText = "Verzoek versturen naar /api/pair...";
 
               fetch("/api/pair", {
                 method: "POST",
@@ -113,43 +86,22 @@ export default {
                 body: JSON.stringify({ secret })
               }).then(async res => {
                 if (res.ok) {
-                  stepApi.className = "step success";
-                  apiDetail.innerHTML = "<span class='badge green'>Status " + res.status + " OK</span> Stateless cookie succesvol geactiveerd!";
-                  stepResult.style.display = "block";
-                  stepResult.className = "step success";
-                  resultTitle.innerText = "🎉 Koppeling Geslaagd!";
-                  resultText.innerHTML = "U bent succesvol stateless verbonden via de beveiligde oq_pump cookie.<br>U wordt binnen 2 seconden automatisch doorstuur naar de live-interface van OpenQuatt...";
+                  document.getElementById("step-api").className = "step success";
+                  document.getElementById("step-result").style.display = "block";
+                  document.getElementById("step-result").className = "step success";
+                  document.getElementById("result-title").innerText = "🎉 Koppeling Geslaagd!";
+                  document.getElementById("result-text").innerHTML = "Succesvol gekoppeld! U wordt binnen 2 seconden doorsturen naar de live-interface...";
                   setTimeout(() => { window.location.href = window.location.origin + "/"; }, 2000);
                 } else {
-                  stepApi.className = "step fail";
-                  const errText = await res.text().catch(() => "Geen platte tekst response.");
-                  let jsonDetail = {};
-                  try { jsonDetail = JSON.parse(errText); } catch(e) {}
-
-                  apiDetail.innerHTML = "<span class=\x27badge red\x27>Fout: Status " + res.status + "</span> De Cloudflare API weigerde de koppeling.";
-                  
-                  stepResult.style.display = "block";
-                  stepResult.className = "step fail";
-                  resultTitle.innerText = "Koppeling Mislukt";
-                  
-                  let debugExplain = "<strong>Mogelijke oorzaken:</strong><br>";
-                  if (res.status === 503 || errText.includes("offline")) {
-                    debugExplain += "<strong>Device Offline (503):</strong> Het Durable Object heeft op dit moment geen actieve WebSocket-pijplijn openstaan vanaf je ESP32 thuis. Controleer of de ESP32-firmware daadwerkelijk verbinding zoekt met <code>wss://quatt.openheatpumps.nl/device</code>.<br>";
-                  } else if (res.status === 401) {
-                    debugExplain += "<strong>Unauthorized (401):</strong> De ESP32 probeert wel te verbinden, maar de Bearer Authorization token matcht niet met de SHA-256 routering.<br>";
-                  } else {
-                    debugExplain += "<strong>Serverfout:</strong> " + errText + "<br>";
-                  }
-                  debugExplain += "<br><small style=\x27color:#666;\x27>Raw Server Response:</small><br><pre>" + (typeof jsonDetail === "object" ? JSON.stringify(jsonDetail, null, 2) : errText) + "</pre>";
-                  resultText.innerHTML = debugExplain;
+                  document.getElementById("step-api").className = "step fail";
+                  const errText = await res.text().catch(() => "Fout");
+                  document.getElementById("step-result").style.display = "block";
+                  document.getElementById("step-result").className = "step fail";
+                  document.getElementById("result-title").innerText = "Koppeling Mislukt";
+                  document.getElementById("result-text").innerHTML = "<pre>" + errText + "</pre>";
                 }
               }).catch(err => {
-                stepApi.className = "step fail";
-                apiDetail.innerText = "Netwerkfout bij het aanroepen van de API.";
-                stepResult.style.display = "block";
-                stepResult.className = "step fail";
-                resultTitle.innerText = "Exception Gevangen";
-                resultText.innerText = err.message;
+                document.getElementById("step-api").className = "step fail";
               });
             }
           </script>
@@ -158,47 +110,35 @@ export default {
       `;
       return new Response(html, { headers: { "Content-Type": "text/html" } });
     }
-
-    // API endpoint om de cookie te zetten (Sectie 10)
+    // ==============================================================================
+    // 3. API ENDPOINT OM DE COOKIE TE ZETTEN (WIRE PROTOCOL V2.0)
+    // ==============================================================================
     if (url.pathname === "/api/pair" && request.method === "POST") {
       try {
         const body: { secret: string } = await request.json();
         const routeId = await computeRouteId(body.secret);
-        console.log("=== [DEBUG] START API PAIR FLOW ===");
-        console.log("• Mobiel Token:", body.secret);
-        console.log("• Berekende routeId:", routeId);
+        console.log("=== [DEBUG] START API PAIR FLOW v2.0 ===");
         
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
         
-        console.log("• [DEBUG] Versturen van Ingress Health Check naar Durable Object...");
+        console.log("• [DEBUG] Versturen van Ingress Health Check (http://local/) naar Durable Object...");
         
         let checkOnline: Response;
         try {
-          checkOnline = await stub.fetch(new Request("http://openquatt.local", {
-            headers: { "Host": "openquatt.local" }
-          }));
-          console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status, checkOnline.statusText);
+          // WIRE PROTOCOL V2.0: Gebruik de pure abstracte cloud URL
+          checkOnline = await stub.fetch(new Request("http://local/"));
+          console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status);
         } catch (fetchError: any) {
-          console.error("🚨 [DEBUG CRASH] stub.fetch() naar de esp_websocket mislukt op netwerklaag!");
-          console.error("• Fouttype:", fetchError.name);
-          console.error("• Foutmelding:", fetchError.message);
           return new Response(JSON.stringify({ 
             error: "Tunnel Fetch Exception", 
-            message: fetchError.message,
-            type: fetchError.name
+            message: fetchError.message 
           }), { status: 502, headers: { "Content-Type": "application/json" } });
         }
         
         if (checkOnline.status !== 200) {
           const rawPayload = await checkOnline.text().catch(() => "Geen payload");
-          console.error("🚨 [DEBUG REJECT] esp_websocket weigert de check! HTTP Status:", checkOnline.status);
-          console.error("• Inhoud van weigering:", rawPayload);
-          return new Response(JSON.stringify({
-            error: "Device rejected check",
-            status: checkOnline.status,
-            payload: rawPayload
-          }), { status: 503, headers: { "Content-Type": "application/json" } });
+          return new Response(rawPayload, { status: checkOnline.status, headers: { "Content-Type": "application/json" } });
         }
 
         console.log("🎉 [DEBUG SUCCESS] Check geslaagd! Set-Cookie wordt afgegeven.");
@@ -209,12 +149,13 @@ export default {
           }
         });
       } catch (e: any) {
-        console.error("🚨 [DEBUG FATAL] Algemene crash in pair endpoint:", e.message);
         return new Response("Bad Request", { status: 400 });
       }
     }
 
-    // 3. Normaal browserbezoek (GET / HEAD)
+    // ==============================================================================
+    // 4. NORMAAL BROWSERBEZOEK (NON-LOCAL CLOUD ROUTING)
+    // ==============================================================================
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed (Tunnel is Read-Only)", { status: 405 });
     }
@@ -224,72 +165,26 @@ export default {
     const secret = cookies["oq_pump"];
     
     if (!secret) {
-      const allHeaders = JSON.stringify(Object.fromEntries(request.headers.entries()), null, 2);
       const debugHtml = `
         <!DOCTYPE html>
         <html>
-        <head>
-          <title>OpenQuatt Proxy Debug</title>
-          <style>
-            body { font-family: sans-serif; padding: 20px; line-height: 1.5; background: #f9f9f9; color: #333; }
-            .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }
-            h2 { color: #d32f2f; margin-top: 0; }
-            pre { background: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; }
-            .meta { font-size: 0.9rem; color: #666; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h2>🔒 Toegang Geweigerd (401 Unauthorized)</h2>
-            <p><strong>Status:</strong> Niet gekoppeld. Gebruik de lokale <code>openquatt.local</code> interface om uw toestel te koppelen.</p>
-            
-            <hr>
-            <h3>🕵️ Buitenshuis Debug Informatie</h3>
-            <p class="meta">De Cloudflare Worker heeft gezocht naar de cookie <code>oq_pump</code>, maar deze is niet meegezonden door uw browser.</p>
-            
-            <p><strong>Gevonden Cookies:</strong></p>
-            <pre>${cookieHeader ? escapeHtml(cookieHeader) : "<i>(Geen cookies aanwezig)</i>"}</pre>
-            
-            <p><strong>Inkomende HTTP Headers:</strong></p>
-            <pre>${escapeHtml(allHeaders)}</pre>
-            
-            <p class="meta"><em>Tip: Schakel de switch op openquatt.local een keer UIT en AAN om de koppelings-cookie opnieuw via de /pair# postfix te genereren.</em></p>
-          </div>
-        </body>
+        <head><title>OpenQuatt Proxy Debug</title></head>
+        <body><div style="font-family:sans-serif;padding:20px;">🔒 Toegang Geweigerd (401 Unauthorized)</div></body>
         </html>
       `;
       return new Response(debugHtml, { status: 401, headers: { "Content-Type": "text/html" } });
-    }
-
-    function escapeHtml(str: string): string {
-      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/\x27/g, "&#x27;");
     }
     
     const routeId = await computeRouteId(secret);
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
-    console.log("==> PROXY FETCH: Inkomend HTTP-verzoek ontvangen voor route:", routeId);
-    console.log("Method:", request.method, "URL:", request.url);
-    
     try {
+      // Zet het inkomende request direct om naar de non-local cloud routing
       const response = await stub.fetch(request);
-      console.log("<== PROXY RESPONSE: Durable Object antwoordde met HTTP status:", response.status);
-      
-      if (response.status === 503) {
-        console.error("🚨 CRITICAL: Durable Object retourneerde een 503! De WebSocket-pijplijn naar de ESP32 is waarschijnlijk abrupt afgebroken tijdens de data-overdracht.");
-      }
       return response;
     } catch (doError: any) {
-      console.error("🚨 FATAL DO CRASH: stub.fetch(request) gooide een runtime-exception!");
-      console.error("• Foutmelding:", doError.message);
-      console.error("• Stacktrace:", doError.stack || "Geen stacktrace beschikbaar");
-      
-      return new Response(JSON.stringify({
-        error: "Durable Object Ingress Failure",
-        message: doError.message,
-        stack: doError.stack
-      }), { status: 502, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: doError.message }), { status: 502 });
     }
   }
 };
@@ -310,4 +205,3 @@ function parseCookies(cookieHeader: string | null): Record<string, string> {
     return acc;
   }, {} as Record<string, string>);
 }
-
