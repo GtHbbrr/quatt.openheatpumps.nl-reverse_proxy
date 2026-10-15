@@ -10,31 +10,35 @@ export default {
     const url = new URL(request.url);
 
     // 1. ESP32 verbindt via WSS naar /device (Sectie 4)
-    // Moderne, flexibele Ingress handler voor de warmtepomp
+    // ==============================================================================
+    // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING
+    // ==============================================================================
     if (url.pathname === "/device") {
-      // Haal het token op uit de header OF uit de veilige query-parameter
+      // Extraheer het token case-insensitive uit de URL query string (v2.0 Standaard)
       const queryToken = url.searchParams.get("token");
+      // Fallback voor eventuele legacy v1 headers
       const authHeader = request.headers.get("Authorization")?.replace("Bearer ", "");
-      const activeToken = queryToken || authHeader;
+      
+      const pumpSecret = queryToken || authHeader;
 
-      if (!activeToken) {
-        console.error("🚨 [WORKER REJECT] Geen authenticatietoken gevonden in header of query string.");
-        return new Response("Unauthorized: Missing token", { status: 401 });
+      if (!pumpSecret) {
+        console.error("🚨 [WORKER REJECT] Ingress geweigerd: Geen authenticatietoken gevonden in query string of header.");
+        return new Response("Unauthorized: Missing token parameter", { status: 401 });
       }
 
-      console.log("🟢 [WORKER INGRESS] Geldige handdruk berekend voor token:", activeToken);
+      console.log("🟢 [WORKER INGRESS] WebSocket handdruk gestart voor token:", pumpSecret);
       
-      const [client, server] = Object.values(new WebSocketPair());
-      const routeId = await computeRouteId(activeToken);
+      // Bereken de cryptografische routeId hash (Sectie 2 & 3)
+      const routeId = await computeRouteId(pumpSecret);
+      console.log("• Berekende routeId hash voor Device:", routeId);
+
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
 
-      // Sla de socket op in het Durable Object via de fetch-route
-      return await stub.fetch(new Request("http://local/register-device", {
-        headers: { "Upgrade": "websocket" },
-        webSocket: client
-      }));
+      // Sla de WebSocket-sessie op in het Durable Object
+      return await stub.fetch(request);
     }
+
 
     // 2. Pairing flow (/pair#<secret>) (Sectie 10)
     if (url.pathname === "/pair") {
