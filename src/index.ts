@@ -10,7 +10,7 @@ export default {
     const url = new URL(request.url);
 
     // ==============================================================================
-    // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING
+    // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING (Sectie 1)
     // ==============================================================================
     if (url.pathname === "/device") {
       const queryToken = url.searchParams.get("token");
@@ -24,20 +24,20 @@ export default {
 
       console.log("🟢 [WORKER INGRESS] WebSocket handdruk gestart voor token:", pumpSecret);
       const routeId = await computeRouteId(pumpSecret);
+      console.log("• Berekende routeId hash voor Device:", routeId);
+
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
 
-      // FIX: Routeer via http://local/device om de Durable Object WebSocket Upgrade te deblokkeren!
+      // FIX: Abstracte DO subrequest-routering conform de platformeisen
       return await stub.fetch(new Request("http://local/device?token=" + pumpSecret, {
         headers: request.headers,
         webSocket: request.headers.get("Upgrade") ? request : undefined
       }));
     }
 
-    }
-
     // ==============================================================================
-    // 2. PAIRING FLOW HTML VIEW (SECTIE 10)
+    // 2. PAIRING FLOW HTML VIEW (Sectie 10)
     // ==============================================================================
     if (url.pathname === "/pair") {
       const html = `
@@ -116,8 +116,9 @@ export default {
       `;
       return new Response(html, { headers: { "Content-Type": "text/html" } });
     }
+
     // ==============================================================================
-    // 3. API ENDPOINT OM DE COOKIE TE ZETTEN (WIRE PROTOCOL V2.0)
+    // 3. API ENDPOINT OM DE COOKIE TE ZETTEN (Sectie 10)
     // ==============================================================================
     if (url.pathname === "/api/pair" && request.method === "POST") {
       try {
@@ -132,7 +133,6 @@ export default {
         
         let checkOnline: Response;
         try {
-          // WIRE PROTOCOL V2.0: Gebruik de pure abstracte cloud URL
           checkOnline = await stub.fetch(new Request("http://local/"));
           console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status);
         } catch (fetchError: any) {
@@ -186,7 +186,6 @@ export default {
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
-      // Zet het inkomende request direct om naar de non-local cloud routing
       const response = await stub.fetch(request);
       return response;
     } catch (doError: any) {
@@ -202,6 +201,8 @@ async function computeRouteId(secret: string): Promise<string> {
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
+
+
 
 function parseCookies(cookieHeader: string | null): Record<string, string> {
   if (!cookieHeader) return {};
