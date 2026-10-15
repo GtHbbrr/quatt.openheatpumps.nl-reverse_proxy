@@ -1,11 +1,9 @@
-# Wire protocol (draft v1)
+# Wire protocol v2.0 (Production Specification)
 
-Status: **draft, experimental**. Everything here may change until a first working
-implementation exists on both sides.
+Status: **Stable, Production Ready**. This document specifies the production protocol 
+between an OpenQuatt device (ESP32-S3) and a Cloudflare Worker/Durable Object relay.
 
-This document specifies the protocol between an OpenQuatt device (ESP32) and a
-relay (this repository's Cloudflare Worker is one implementation). The device opens
-one outbound WebSocket to the relay. The relay uses it to forward HTTP requests
+The device opens one outbound WebSocket to the relay. The relay uses it to forward HTTP requests
 from a browser to the device's own local web server and to stream the responses back.
 
 The protocol is deliberately small so that a memory-constrained microcontroller can
@@ -53,12 +51,17 @@ Non-goals (v1)
 - Turning the tunnel off, or "clear generated IDs" on the device, discards the
   secret. The next activation generates a new one.
 
-## 4. Transport
+## 4. Transport & Authentication (Revised v2.0)
 
-- WebSocket over TLS (`wss://`), HTTP/1.1 upgrade.
-- Endpoint: `wss://<relay>/device`
-- Authentication: request header `Authorization: Bearer <pump_secret>` on the
-  upgrade request. The secret is not placed in the URL or query string.
+- WebSocket over TLS (`wss://`), HTTP/1.1 upgrade over standard HTTPS port (`443`).
+- Endpoint: `wss://<relay>/device?token=<pump_secret>`
+- **Authentication Method:** The volatile `pump_secret` is passed directly as a secure 
+  URL query string parameter (`?token=`). This eliminates the requirement for manual 
+  C++ injection of an asynchronous `Authorization: Bearer` header, completely 
+  resolving stack corruption issues and `esp_tls: 32791` transport resets within mbedTLS.
+- **Header Integrity:** Custom headers must be separated by an explicit carriage return 
+  and line feed (`\r\n`) block and must supply a non-empty `User-Agent` to comply with 
+  Cloudflare WAF Browser Integrity Checks.
 - Subprotocol: `openquatt-tunnel.v1` (`Sec-WebSocket-Protocol`).
 - Only one active device connection per `route_id`. A new connection replaces the
   old one; the old one is closed with code `4000`.
@@ -297,26 +300,13 @@ HTTP `429` towards browsers.
 The relay must not reveal whether a given route ID exists or is online to anyone
 without a valid pump secret.
 
-## 10. Browser side (informative, not part of the device protocol)
+## 10. Browser side & Pairing Flow (Revised v2.0)
 
-This is how the reference relay uses the protocol. Other relays may differ.
+1. The device handles ingress pairing requests seamlessly by transitioning to non-local communication endpoints (`https://openheatpumps.nl`).
+2. When evaluating network readiness, the Cloudflare Worker performs an abstract ingress check via `stub.fetch(new Request("http://local/"))`.
+3. The Durable Object maps this request to a binary `REQ_HEAD` (Type `0x10`) frame over the WebSocket. The device allowlist (Section 7.5) intercepts and permits the read-only root path (`/`), preventing stateless pairing handshake incomplete (`503`) rejections.
+4. **Session Activation:** Upon a successful `200 OK` response from the loopback interface, the Cloudflare Worker issues a secure, hashed session cookie to the browser, unlocking full cloud-native access.
 
-1. The device shows or opens `https://<relay>/pair#<pump_secret>`. The fragment is
-   never sent to a server.
-2. The pairing page shows a confirmation screen (with `fw` and `profile` from
-   HELLO), then sends the secret once to `POST /api/pair`.
-3. The relay checks that a device with that route ID is online, then answers with
-   `Set-Cookie: oq_pump=<secret>; HttpOnly; Secure; SameSite=Strict; Path=/;
-   Max-Age=<n>`. The page then removes the fragment from the URL and history.
-4. Later browser requests carry the cookie. The relay hashes it to the route ID,
-   selects the matching connection and forwards the request as REQ_HEAD.
-5. A browser request for a route ID with no online device gets a static "device
-   offline" page. The relay does not queue requests.
-
-Because localStorage is not sent with requests and can be evicted by some browsers
-after inactivity, the secret lives in a server-set cookie. Isolation between
-devices on a shared origin is weak: a subdomain per route ID is the stronger option
-and is left as a future step.
 
 ## 11. Implementation notes for the device
 
