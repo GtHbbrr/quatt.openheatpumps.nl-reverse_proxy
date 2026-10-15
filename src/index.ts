@@ -133,7 +133,8 @@ export default {
         
         let checkOnline: Response;
         try {
-          checkOnline = await stub.fetch(new Request("http://local/"));
+          checkOnline = await stub.fetch(new Request("http://local/device"));
+
           console.log("• [DEBUG] Ingress Response ontvangen! Status:", checkOnline.status);
         } catch (fetchError: any) {
           return new Response(JSON.stringify({ 
