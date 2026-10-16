@@ -10,7 +10,7 @@ export default {
     const url = new URL(request.url);
 
     // ==============================================================================
-    // 1. WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING
+    // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING (PRODUCTION RELAY)
     // ==============================================================================
     if (url.pathname === "/device") {
       const queryToken = url.searchParams.get("token");
@@ -22,17 +22,16 @@ export default {
         return new Response("Unauthorized: Missing token parameter", { status: 401 });
       }
 
-      console.log("🟢 [WORKER INGRESS] WebSocket handdruk gestart voor token:", pumpSecret);
+      console.log("🟢 [WORKER INGRESS] WebSocket handdruk doorzetten voor token:", pumpSecret);
       const routeId = await computeRouteId(pumpSecret);
 
       const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
       const stub = env.TUNNEL_REGISTRY.get(doId);
 
-      return await stub.fetch(new Request("http://local/device?token=" + pumpSecret, {
-        headers: request.headers,
-        webSocket: request.headers.get("Upgrade") ? request : undefined
-      }));
+      // FIX: Stuur het originele request object direct ongewijzigd door om de platform WebSocket Upgrade te beschermen!
+      return await stub.fetch(request);
     }
+
 
     // ==============================================================================
     // 2. PAIRING FLOW HTML VIEW (Vangt de # hash-prikkel client-side op!)
