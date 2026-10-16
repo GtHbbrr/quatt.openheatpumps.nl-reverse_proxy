@@ -36,12 +36,17 @@ export default {
     }
 
     // ==============================================================================
-    // 2. COOKIE PAIRING ENDPOINT: SCHRIJF HET ECHTE DYNAMISCHE TOKEN WEG!
+    // 2. COOKIE PAIRING REDIRECT ENDPOINT (WIRE PROTOCOL V2.0)
     // ==============================================================================
     if (url.pathname === "/pair") {
-      // Extraheer het unieke geheim uit het URL hash-fragment (#oq-xxx)
-      const secret = url.hash.substring(1);
+      // Haal het token op uit de query string (?token=oq-xxx) voor server-side tracking
+      const secret = url.searchParams.get("token");
       
+      if (!secret) {
+        console.error("🚨 [PRODUCTION PAIR] Paring afgebroken: Geen token parameter gevonden in de URL.");
+        return new Response("Pairing Failed: Missing token query parameter", { status: 400 });
+      }
+
       console.log("🔓 [PRODUCTION PAIR] Paring cookie activeren voor dynamisch token:", secret);
       
       // We sturen een HTTP 302 Redirect terug naar de root (/) van de reverse proxy
@@ -55,7 +60,52 @@ export default {
     }
 
     // ==============================================================================
-    // 3. BROWSER PROXYING: LOODS DATA OVER DE ACTIEVE WEBSOCKET
+    // 3. API ENDPOINT OM DE HANDSHAKE VIA HET DURABLE OBJECT TE CONTROLEREN
+    // ==============================================================================
+    if (url.pathname === "/api/pair" && request.method === "POST") {
+      try {
+        const body: { secret: string } = await request.json();
+        
+        if (!body.secret) {
+          return new Response(JSON.stringify({ error: "Missing secret parameter" }), { 
+            status: 400, 
+            headers: { "Content-Type": "application/json" } 
+          });
+        }
+
+        const routeId = await computeRouteId(body.secret);
+        console.log("=== [DEBUG] START API PAIR FLOW v2.0 ===");
+        
+        const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
+        const stub = env.TUNNEL_REGISTRY.get(doId);
+        
+        console.log("• [DEBUG] Versturen van Ingress Health Check naar: http://local/device/check");
+        
+        const checkOnline = await stub.fetch(new Request("http://local/device/check"));
+        console.log("• [DEBUG] Ingress Response ontvangen! HTTP Status:", checkOnline.status);
+        
+        if (checkOnline.status !== 200) {
+          const rawPayload = await checkOnline.text().catch(() => "Geen payload");
+          return new Response(rawPayload, { 
+            status: checkOnline.status, 
+            headers: { "Content-Type": "application/json" } 
+          });
+        }
+
+        console.log("🎉 [DEBUG SUCCESS] Check geslaagd! Set-Cookie wordt afgegeven.");
+        return new Response(JSON.stringify({ success: true }), {
+          headers: {
+            "Content-Type": "application/json",
+            "Set-Cookie": `oq_pump=${body.secret}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`
+          }
+        });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: "Bad Request", message: e.message }), { status: 400 });
+      }
+    }
+
+    // ==============================================================================
+    // 4. BROWSER PROXYING: LOODS DATA OVER DE ACTIEVE WEBSOCKET
     // ==============================================================================
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed (Tunnel is Read-Only)", { status: 405 });
