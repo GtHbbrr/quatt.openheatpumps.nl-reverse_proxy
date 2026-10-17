@@ -17,7 +17,6 @@ export class TunnelRegistry extends DurableObject {
   }
 
   // ✅ HIBERNATION-SAFE STATE EXTRACTION
-  // Haalt de actieve WebSocket op en valideert de status via Cloudflare attachments
   private getDeviceWs(): WebSocket | null {
     const sockets = this.ctx.getWebSockets();
     for (const ws of sockets) {
@@ -34,12 +33,26 @@ export class TunnelRegistry extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // ── Health check (Wacht maximaal 3 seconden op de C++ HELLO handshake) ──
+    // ── ✅ GECOMBINEERDE HEALTH CHECK: AI DEBUG LOGS + 5 SECONDEN TIMING FIX ──
     if (url.pathname === "/device/check") {
-      for (let i = 0; i < 30; i++) {
+      // 1. Toon alle actieve WebSockets en hun attachments direct in de Cloudflare stream
+      const sockets = this.ctx.getWebSockets();
+      console.log(`🔍 [DO] getWebSockets() = ${sockets.length} socket(s)`);
+      for (let i = 0; i < sockets.length; i++) {
+        try {
+          const att = sockets[i].deserializeAttachment();
+          console.log(`🔍 [DO] socket[${i}] attachment = ${JSON.stringify(att)}`);
+        } catch(e: any) {
+          console.log(`🔍 [DO] socket[${i}] deserialize error: ${e.message}`);
+        }
+      }
+
+      // 2. Verruimde 5 seconden loop (50 iteraties * 100ms) voor trage hardware synchronisatie
+      for (let i = 0; i < 50; i++) { 
         if (this.getDeviceWs()) break;
         await new Promise(r => setTimeout(r, 100));
       }
+      
       const ws = this.getDeviceWs();
       const isOnline = ws !== null;
       console.log(`• [DO STATUS] Live controle. Operationeel: ${isOnline}`);
@@ -70,7 +83,7 @@ export class TunnelRegistry extends DurableObject {
           try { oldWs.close(4000, "Replaced by newer connection"); } catch(e){}
         }
 
-        // ✅ HIBERNATION STATE INITIALISATIE
+        // Hibernation state initialisatie
         server.serializeAttachment({ handshaked: false });
         this.ctx.acceptWebSocket(server);
         console.log("✅ [DO] acceptWebSocket aangeroepen.");
@@ -132,7 +145,6 @@ export class TunnelRegistry extends DurableObject {
   }
 
   // ── HIBERNATION API EVENT HANDLERS ──
-
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
     if (!(message instanceof ArrayBuffer)) {
       ws.close(4003, "Protocol error: Text frame received");
@@ -175,7 +187,7 @@ export class TunnelRegistry extends DurableObject {
 
           ws.send(ackFrame);
 
-          // ✅ PERSIST STATE IN ATTACHMENT: Overleeft V8 memory hibernation!
+          // ✅ PERSIST STATE IN ATTACHMENT: Sla de status direct op in de WebSocket-laag
           ws.serializeAttachment({ handshaked: true });
           console.log("🟢 [DO] Handshake succesvol voltooid en opgeslagen in attachment.");
         } catch (e) {
@@ -185,11 +197,11 @@ export class TunnelRegistry extends DurableObject {
       return;
     }
 
-    // ── Binaire HTTP proxy data streaming back to browser ──
+    // ── Binaire HTTP proxy data streaming ──
     const activeReq = this.pendingRequests.get(streamId);
     if (!activeReq) return;
 
-    if (type === 0x20) { // RES_HEAD -> Response stream openen
+    if (type === 0x20) { // RES_HEAD
       try {
         const resHead = JSON.parse(decoder.decode(payload));
         const headers = new Headers(resHead.h);
@@ -206,14 +218,14 @@ export class TunnelRegistry extends DurableObject {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
     } 
-    else if (type === 0x21) { // RES_BODY -> Pomp binaire chunks door
+    else if (type === 0x21) { // RES_BODY
       try { 
         await activeReq.writer.write(payload); 
       } catch(e) { 
         this.pendingRequests.delete(streamId); 
       }
     } 
-    else if (type === 0x22) { // RES_END -> Sluit streaming pipe
+    else if (type === 0x22) { // RES_END
       this.pendingRequests.delete(streamId);
       try { await activeReq.writer.close(); } catch(e){}
     } 
