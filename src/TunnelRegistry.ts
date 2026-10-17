@@ -10,7 +10,6 @@ export class TunnelRegistry extends DurableObject {
   }>();
   private isHandshaked = false;
 
-  // Constructor gecorrigeerd met de juiste Cloudflare type-definities
   constructor(ctx: DurableObjectState, env: any) {
     super(ctx, env);
   }
@@ -18,7 +17,7 @@ export class TunnelRegistry extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WIRE PROTOCOL V2.0: REAL-TIME HEALTH STATUS ROUTE (MET TLS HANDSHAKE RETRY-LOOP)
+    // WIRE PROTOCOL V2.0: REAL-TIME HEALTH STATUS ROUTE
     if (url.pathname === "/device/check") {
       for (let i = 0; i < 30; i++) {
         if (this.deviceWs && this.isHandshaked) break;
@@ -40,28 +39,39 @@ export class TunnelRegistry extends DurableObject {
       });
     }
 
-    // WebSocket upgrade-aanvraag afkomstig van de ESP32
+    // ✅ DEBUG VERSIE: WebSocket upgrade-aanvraag met try-catch en stap-voor-stap logging
     if (url.pathname === "/device") {
       console.log("🟢 [DO] /device WebSocket upgrade ontvangen.");
-      
-      const [client, server] = Object.values(new WebSocketPair());
-      
-      if (this.deviceWs) {
-        try { this.deviceWs.close(4000, "Replaced by newer connection"); } catch(e){}
+
+      try {
+        const [client, server] = Object.values(new WebSocketPair());
+        console.log("✅ [DO] WebSocketPair gemaakt.");
+        
+        if (this.deviceWs) {
+          try { this.deviceWs.close(4000, "Replaced by newer connection"); } catch(e){}
+        }
+
+        this.deviceWs = server;
+        this.isHandshaked = false;
+
+        this.ctx.acceptWebSocket(server);
+        console.log("✅ [DO] acceptWebSocket aangeroepen.");
+
+        // We laten de Sec-WebSocket-Protocol weg conform AI advies om runtime-interferentie te uitsluiten
+        return new Response(null, { 
+          status: 101, 
+          webSocket: client
+        });
+      } catch (err: any) {
+        console.error("🚨 [DO] WebSocket upgrade fout:", err.message, err.stack);
+        return new Response(JSON.stringify({ 
+          error: "WebSocket upgrade failed", 
+          detail: err.message 
+        }), { 
+          status: 502, 
+          headers: { "Content-Type": "application/json" } 
+        });
       }
-
-      this.deviceWs = server;
-      this.isHandshaked = false;
-
-      // ✅ HIBERNATION API: Registreer de server-socket bij de DO runtime context
-      this.ctx.acceptWebSocket(server);
-
-      // Retourneer het client-puzzelstuk met de verplichte subprotocol-header
-      return new Response(null, { 
-        status: 101, 
-        webSocket: client,
-        headers: { "Sec-WebSocket-Protocol": "openquatt-tunnel.v1" }
-      });
     }
 
     if (!this.deviceWs || !this.isHandshaked) {
@@ -92,12 +102,11 @@ export class TunnelRegistry extends DurableObject {
     frame[0] = 0x10; // REQ_HEAD
     
     const view = new DataView(frame.buffer);
-    view.setUint32(1, streamId, false); // Big Endian
+    view.setUint32(1, streamId, false);
     frame.set(payloadBytes, 5);
 
     this.deviceWs.send(frame);
 
-    // ECHTE STATELESS STREAMING: Direct streamen via TransformStream naar de browser
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
 
@@ -114,15 +123,13 @@ export class TunnelRegistry extends DurableObject {
     });
   }
 
-  // ✅ HIBERNATION API EVENT HANDLERS (Vervangen addEventListener volledig)
-
+  // HIBERNATION API EVENT HANDLERS
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
     if (!(message instanceof ArrayBuffer)) {
       ws.close(4003, "Protocol error: Text frame received");
       return;
     }
 
-    // Geïsoleerde byte parsing om byteOffset-verschuivingen in de V8 engine te elimineren
     const rawBytes = new Uint8Array(message);
     const frame = new Uint8Array(rawBytes); 
     if (frame.length < 5) return;
@@ -133,7 +140,6 @@ export class TunnelRegistry extends DurableObject {
     const payload = frame.slice(5);
     const decoder = new TextDecoder();
 
-    // Handshake afhandeling op stream 0
     if (streamId === 0) {
       if (type === 0x01) { // HELLO
         try {
@@ -167,11 +173,10 @@ export class TunnelRegistry extends DurableObject {
       return;
     }
 
-    // Proxy stream-afhandeling voor actieve HTTP verzoeken
     const activeReq = this.pendingRequests.get(streamId);
     if (!activeReq) return;
 
-    if (type === 0x20) { // RES_HEAD -> Resolven zodra de headers binnen zijn
+    if (type === 0x20) { // RES_HEAD
       try {
         const resHead = JSON.parse(decoder.decode(payload));
         const headers = new Headers(resHead.h);
@@ -189,14 +194,14 @@ export class TunnelRegistry extends DurableObject {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
     } 
-    else if (type === 0x21) { // RES_BODY -> Schrijf chunks direct door naar de browser stream
+    else if (type === 0x21) { // RES_BODY
       try {
         await activeReq.writer.write(payload);
       } catch(e) {
         this.pendingRequests.delete(streamId);
       }
     } 
-    else if (type === 0x22) { // RES_END -> Sluit de browser streaming-pipe netjes af
+    else if (type === 0x22) { // RES_END
       this.pendingRequests.delete(streamId);
       try { await activeReq.writer.close(); } catch(e){}
     } 
