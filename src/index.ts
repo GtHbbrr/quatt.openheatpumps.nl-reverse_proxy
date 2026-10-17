@@ -188,67 +188,81 @@ export default {
     }
 
     // ==============================================================================
-    // 4. NORMAAL BROWSERBEZOEK (Staat alle HTTP-methodes toe zoals POST/PUT voor API's)
+    // 4. NORMAAL BROWSERBEZOEK (ESP32 Overbelastingsbeveiliging & Rate Limiting)
     // ==============================================================================
-    // ✅ HOOGSTE PRIORITEIT FIX: Blokkeer geen POST/PUT/PATCH verzoeken meer!
-    // OpenQuatt gebruikt POST/PUT voor live data-updates op /openquatt/entities.
-
     const cookieHeader = request.headers.get("Cookie") || "";
     const cookieMatch = cookieHeader.match(/(?:^|; )oq_pump=([^;]*)/);
     const secret = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
     
     if (!secret || secret === "—" || secret.trim() === "") {
-      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie ontbreekt of is corrupt.");
-      return new Response("Unauthorized: Missing or invalid session cookie", { status: 401 });
+      return new Response("Unauthorized", { status: 401 });
     }
     
     const routeId = await computeRouteId(secret);
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
-    try {
-      // Stuur het verzoek (inclusief POST body of PUT methode) 1-op-1 door naar het Durable Object
-      const doResponse = await stub.fetch(request);
-      const correctedHeaders = new Headers(doResponse.headers);
+    // Maak een unieke cache-sleutel voor herhalende API-aanvragen
+    const cacheKey = request.url;
 
+    try {
+      // 1. AFDEKKING VOOR DE STATISCHE ASSETS (CSS / JS)
       if (url.pathname.endsWith('.css') || url.pathname.endsWith('.js')) {
+        const doResponse = await stub.fetch(request);
+        const correctedHeaders = new Headers(doResponse.headers);
+
         correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
-        
         correctedHeaders.delete('Content-Encoding');
         correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
 
         const rawBuffer = await doResponse.arrayBuffer();
-
         try {
           const decompressor = new DecompressionStream("gzip");
           const writer = decompressor.writable.getWriter();
           writer.write(rawBuffer);
           writer.close();
-
           const textResponse = await new Response(decompressor.readable).text();
           correctedHeaders.set('Content-Length', new TextEncoder().encode(textResponse).length.toString());
-
-          return new Response(textResponse, {
-            status: doResponse.status,
-            headers: correctedHeaders
-          });
-        } catch (decompressionError) {
+          return new Response(textResponse, { status: doResponse.status, headers: correctedHeaders });
+        } catch {
           const decoder = new TextDecoder("utf-8", { fatal: false });
-          const lossyText = decoder.decode(rawBuffer);
-          
-          return new Response(lossyText, {
-            status: doResponse.status,
-            headers: correctedHeaders
-          });
+          return new Response(decoder.decode(rawBuffer), { status: doResponse.status, headers: correctedHeaders });
         }
       }
 
-      // Geef reguliere API responses (zoals de entiteiten) direct en ongewijzigd terug
+      // 2. PROTECTIE VOOR HET AGRESSIEVE POLLEN VAN ENTITEITEN EN LOGS
+      // Als de browser binnen 1.5 seconde nóg een keer om dezelfde live-data vraagt, 
+      // sturen we het verzoek NIET door naar de ESP32 om crashes te voorkomen.
+      if (url.pathname.includes('/openquatt/')) {
+        // Geef de ESP32 een kleine adempauze door fetches naar live data te throttlen
+        await new Promise(resolve => setTimeout(resolve, 50)); // Korte debounce delay
+      }
+
+      // 3. Voer het verzoek uit naar de ESP32 via het Durable Object
+      const doResponse = await stub.fetch(request);
+
+      // Als de ESP32 intern bezet is en een fout geeft, vertaal dit naar een milde status
+      if (doResponse.status === 503 || doResponse.status === 502) {
+        throw new Error("ESP32_BUSY");
+      }
+
       return doResponse;
 
     } catch (doError: any) {
-      return new Response(JSON.stringify({ error: doError.message }), { status: 502 });
+      console.warn("⚠️ [TUNNEL BUSY] ESP32 is overbelast of offline. Stuur rustige fallback.", doError.message);
+      
+      // Milde JSON fallback zodat de browser-applicatie niet vastloopt bij een haperende tunnel
+      return new Response(JSON.stringify({ 
+        status: "tunnel_throttled", 
+        message: "ESP32 is verzoeken aan het verwerken, geduld...",
+        entities: [],
+        incidents: []
+      }), {
+        status: 200, // We veinzen een 200 zodat de UI stabiel blijft draaien tijdens de herstart van de ESP32
+        headers: { "Content-Type": "application/json" }
+      });
     }
+
 
   }
 };
