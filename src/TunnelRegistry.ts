@@ -204,22 +204,39 @@ export class TunnelRegistry extends DurableObject {
     if (type === 0x20) { // RES_HEAD -> Response stream openen voor de browser
       try {
         const resHead = JSON.parse(decoder.decode(payload));
-        const headers = new Headers(resHead.h);
+        const responseHeaders = new Headers();
         
-        // GECORRIGEERDE CSP-HEADER: Geef de OpenQuatt SPA de ruimte om JavaScript en stijlen uit te voeren
-        headers.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' wss:; img-src 'self' data:;");
-        headers.set("X-Content-Type-Options", "nosniff");
-        headers.set("Referrer-Policy", "no-referrer");
-        headers.set("X-Frame-Options", "DENY");
+        // 1. Kopieer handmatig de originele headers van de ESP32 naar de schone Headers klasse
+        if (resHead.h) {
+          for (const [key, value] of Object.entries(resHead.h)) {
+            responseHeaders.set(key, value as string);
+          }
+        }
         
+        // 2. Fallback: Als er om wat voor reden dan ook geen content-type is meegegeven, zet hem op text/html
+        if (!responseHeaders.has("content-type")) {
+          responseHeaders.set("content-type", "text/html; charset=utf-8");
+        }
+        
+        // 3. Voeg de vereiste security- en streaming-headers toe voor iOS/Safari compliance
+        responseHeaders.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline';");
+        responseHeaders.set("X-Content-Type-Options", "nosniff");
+        responseHeaders.set("Referrer-Policy", "no-referrer");
+        responseHeaders.set("X-Frame-Options", "DENY");
+        
+        // Dwing chunked transfer af zodat Safari weet dat het om een real-time binaire stream gaat
+        responseHeaders.set("Transfer-Encoding", "chunked");
+
+        // Los de promise in met de herziene responseHeaders structuur
         activeReq.resolve(new Response(activeReq.readable, {
           status: resHead.s || 200, 
-          headers
+          headers: responseHeaders
         }));
       } catch (e) {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
     } 
+
     else if (type === 0x21) { // RES_BODY
       try { 
         await activeReq.writer.write(payload); 
