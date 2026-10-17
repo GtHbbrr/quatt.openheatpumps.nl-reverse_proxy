@@ -204,17 +204,16 @@ export class TunnelRegistry extends DurableObject {
     if (type === 0x20) { // RES_HEAD -> Response stream openen voor de browser
       try {
         const resHead = JSON.parse(decoder.decode(payload));
-        
-        // 1. Bouw de headers op als een plat, statisch JavaScript object (Verplicht voor V8 Streaming Response compliance!)
         const plainHeaders: Record<string, string> = {};
         
+        // 1. Kopieer de originele headers van de ESP32 en dwing alle sleutels naar kleine letters
         if (resHead.h) {
           for (const [key, value] of Object.entries(resHead.h)) {
             plainHeaders[key.toLowerCase()] = value as string;
           }
         }
         
-        // 2. Fallback: Garandeer dat er altijd een Content-Type aanwezig is
+        // 2. Garandeer uitsluitend een HTML fallback als er écht geen content-type is meegegeven
         if (!plainHeaders["content-type"]) {
           plainHeaders["content-type"] = "text/html; charset=utf-8";
         }
@@ -224,12 +223,11 @@ export class TunnelRegistry extends DurableObject {
         plainHeaders["x-content-type-options"] = "nosniff";
         plainHeaders["referrer-policy"] = "no-referrer";
         plainHeaders["x-frame-options"] = "DENY";
-        plainHeaders["transfer-encoding"] = "chunked"; // Dwing iOS Safari tot real-time chunked verwerking
+        plainHeaders["transfer-encoding"] = "chunked"; // Vereist voor stabiele streaming op iOS Safari
 
-        // 4. Los de promise in via de correcte Cloudflare Response structuur
         const response = new Response(activeReq.readable, {
           status: resHead.s || 200, 
-          headers: plainHeaders // <-- GECORRIGEERD: Plat object meegegeven
+          headers: plainHeaders
         });
         
         activeReq.resolve(response);
@@ -237,6 +235,7 @@ export class TunnelRegistry extends DurableObject {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
     }
+
 
 
     else if (type === 0x21) { // RES_BODY
