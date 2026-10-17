@@ -214,6 +214,7 @@ export default {
         correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
         correctedHeaders.delete('Content-Encoding');
         correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
+        correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;");
 
         const rawBuffer = await doResponse.arrayBuffer();
         try {
