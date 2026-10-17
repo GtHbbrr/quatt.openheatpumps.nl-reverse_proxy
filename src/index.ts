@@ -215,13 +215,38 @@ export default {
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
-      return await stub.fetch(request);
+      // 1. Haal de response op uit het Durable Object (de ESP32)
+      const doResponse = await stub.fetch(request);
+      
+      // 2. Kopieer de headers zodat we ze veilig kunnen aanpassen
+      const correctedHeaders = new Headers(doResponse.headers);
+
+      // 3. FIX: Herstel MIME-types én dwing gzip-encoding af voor de gecomprimeerde ESP32 assets
+      if (url.pathname.endsWith('.css')) {
+        correctedHeaders.set('Content-Type', 'text/css; charset=utf-8');
+        correctedHeaders.set('Content-Encoding', 'gzip');
+      } else if (url.pathname.endsWith('.js')) {
+        correctedHeaders.set('Content-Type', 'application/javascript; charset=utf-8');
+        correctedHeaders.set('Content-Encoding', 'gzip');
+      }
+
+      // 4. CRUCIAAL: Dwing Cloudflare om met zijn vingers van de compressie (zstd) af te blijven
+      correctedHeaders.set('Cache-Control', 'no-transform');
+
+      // Geef de gecorrigeerde response terug aan de browser van de iPhone
+      return new Response(doResponse.body, {
+        status: doResponse.status,
+        statusText: doResponse.statusText,
+        headers: correctedHeaders
+      });
+
     } catch (doError: any) {
       console.error("🚨 [PROXY CRASH] Fout tijdens subasset proxy-fetch:", doError.message);
       return new Response(JSON.stringify({ error: doError.message }), { status: 502 });
     }
   }
 };
+
 
 
 async function computeRouteId(secret: string): Promise<string> {
