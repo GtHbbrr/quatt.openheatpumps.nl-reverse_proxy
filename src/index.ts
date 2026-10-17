@@ -188,64 +188,74 @@ export default {
     }
 
     // ==============================================================================
-    // 4. NORMAAL BROWSERBEZOEK (NON-LOCAL CLOUD ROUTING)
+    // 4. NORMAAL BROWSERBEZOEK (Server-side herstel - 0% ESP32 overhead)
     // ==============================================================================
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
     const cookieHeader = request.headers.get("Cookie") || "";
-    
-    // ✅ ROBUUSTE REGEX FIX: Zoek doelgericht naar de exacte oq_pump cookie-waarde
     const cookieMatch = cookieHeader.match(/(?:^|; )oq_pump=([^;]*)/);
     const secret = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
     
     if (!secret || secret === "—" || secret.trim() === "") {
-      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie ontbreekt of is corrupt.");
-      return new Response("Unauthorized: Missing or invalid session cookie", { status: 401 });
+      return new Response("Unauthorized", { status: 401 });
     }
     
-    // Genereer de hash-routing ID op basis van het correct uitgepakte geheim
     const routeId = await computeRouteId(secret);
-    
-    // Toon de subasset-routering in de logs om de DO-aanroep zwart-op-wit te bewijzen
-    console.log(`✈️ [PROXY ROUTE] Subasset ${url.pathname} doorzetten naar RouteId: ${routeId}`);
-
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
-      // 1. Haal de response op uit het Durable Object
       const doResponse = await stub.fetch(request);
-      
-      // 2. Kopieer en corrigeer de headers
       const correctedHeaders = new Headers(doResponse.headers);
 
-      if (url.pathname.endsWith('.css')) {
-        correctedHeaders.set('Content-Type', 'text/css; charset=utf-8');
-        correctedHeaders.set('Content-Encoding', 'gzip');
-      } else if (url.pathname.endsWith('.js')) {
-        correctedHeaders.set('Content-Type', 'application/javascript; charset=utf-8');
-        correctedHeaders.set('Content-Encoding', 'gzip');
+      if (url.pathname.endsWith('.css') || url.pathname.endsWith('.js')) {
+        correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
+        
+        // We halen de gzip-compressie er in Cloudflare volledig vanaf om de browser te redden!
+        correctedHeaders.delete('Content-Encoding');
+        correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
+
+        // Haal de rauwe binaire data binnen in Cloudflare
+        const rawBuffer = await doResponse.arrayBuffer();
+
+        try {
+          // We jagen de mogelijk corrupte binaire bytes door Cloudflare's decompressor
+          const decompressor = new DecompressionStream("gzip");
+          const writer = decompressor.writable.getWriter();
+          writer.write(rawBuffer);
+          writer.close();
+
+          const textResponse = await new Response(decompressor.readable).text();
+
+          // Herbereken de exacte content-length van de schone, uitgepakte tekst
+          correctedHeaders.set('Content-Length', new TextEncoder().encode(textResponse).length.toString());
+
+          return new Response(textResponse, {
+            status: doResponse.status,
+            headers: correctedHeaders
+          });
+        } catch (decompressionError) {
+          // FALLBACK: Als de stream zo corrupt is dat zelfs Cloudflare weigert,
+          // probeer hem dan als rauwe tekst te serveren zodat we de fout in de console zien
+          console.error("🚨 [WORKER] Gzip decompressie mislukt onderweg:", decompressionError);
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+          const lossyText = decoder.decode(rawBuffer);
+          
+          return new Response(lossyText, {
+            status: doResponse.status,
+            headers: correctedHeaders
+          });
+        }
       }
 
-      // Voorkom dat Cloudflare naderhand de boel alsnog aanpast
-      correctedHeaders.set('Cache-Control', 'no-transform');
-
-      // 3. CRUCIAAL: Lees de data in als ArrayBuffer i.p.v. een rauwe stream te forwarden.
-      // Dit dwingt Cloudflare om de gzip-bytes binair correct te verpakken.
-      const buffer = await doResponse.arrayBuffer();
-
-      return new Response(buffer, {
-        status: doResponse.status,
-        statusText: doResponse.statusText,
-        headers: correctedHeaders
-      });
+      return doResponse;
 
     } catch (doError: any) {
-      console.error("🚨 [PROXY CRASH] Fout tijdens subasset proxy-fetch:", doError.message);
       return new Response(JSON.stringify({ error: doError.message }), { status: 502 });
     }
+
   }
 };
 
