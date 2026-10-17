@@ -215,13 +215,12 @@ export default {
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
-      // 1. Haal de response op uit het Durable Object (de ESP32)
+      // 1. Haal de response op uit het Durable Object
       const doResponse = await stub.fetch(request);
       
-      // 2. Kopieer de headers zodat we ze veilig kunnen aanpassen
+      // 2. Kopieer en corrigeer de headers
       const correctedHeaders = new Headers(doResponse.headers);
 
-      // 3. FIX: Herstel MIME-types én dwing gzip-encoding af voor de gecomprimeerde ESP32 assets
       if (url.pathname.endsWith('.css')) {
         correctedHeaders.set('Content-Type', 'text/css; charset=utf-8');
         correctedHeaders.set('Content-Encoding', 'gzip');
@@ -230,11 +229,14 @@ export default {
         correctedHeaders.set('Content-Encoding', 'gzip');
       }
 
-      // 4. CRUCIAAL: Dwing Cloudflare om met zijn vingers van de compressie (zstd) af te blijven
+      // Voorkom dat Cloudflare naderhand de boel alsnog aanpast
       correctedHeaders.set('Cache-Control', 'no-transform');
 
-      // Geef de gecorrigeerde response terug aan de browser van de iPhone
-      return new Response(doResponse.body, {
+      // 3. CRUCIAAL: Lees de data in als ArrayBuffer i.p.v. een rauwe stream te forwarden.
+      // Dit dwingt Cloudflare om de gzip-bytes binair correct te verpakken.
+      const buffer = await doResponse.arrayBuffer();
+
+      return new Response(buffer, {
         status: doResponse.status,
         statusText: doResponse.statusText,
         headers: correctedHeaders
