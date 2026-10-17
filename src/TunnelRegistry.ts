@@ -1,4 +1,6 @@
-export class TunnelRegistry implements DurableObject {
+import { DurableObject } from "cloudflare:workers";
+
+export class TunnelRegistry extends DurableObject {
   private deviceWs: WebSocket | null = null;
   private nextStreamId = 1;
   private pendingRequests = new Map<number, { 
@@ -8,7 +10,10 @@ export class TunnelRegistry implements DurableObject {
   }>();
   private isHandshaked = false;
 
-  constructor(private state: DurableObjectState, private env: any) {}
+  // Constructor gecorrigeerd met de juiste Cloudflare type-definities
+  constructor(ctx: DurableObjectState, env: any) {
+    super(ctx, env);
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -35,7 +40,10 @@ export class TunnelRegistry implements DurableObject {
       });
     }
 
+    // WebSocket upgrade-aanvraag afkomstig van de ESP32
     if (url.pathname === "/device") {
+      console.log("🟢 [DO] /device WebSocket upgrade ontvangen.");
+      
       const [client, server] = Object.values(new WebSocketPair());
       
       if (this.deviceWs) {
@@ -44,9 +52,16 @@ export class TunnelRegistry implements DurableObject {
 
       this.deviceWs = server;
       this.isHandshaked = false;
-      this.setupDeviceWebSocket();
 
-      return new Response(null, { status: 101, webSocket: client });
+      // ✅ HIBERNATION API: Registreer de server-socket bij de DO runtime context
+      this.ctx.acceptWebSocket(server);
+
+      // Retourneer het client-puzzelstuk met de verplichte subprotocol-header
+      return new Response(null, { 
+        status: 101, 
+        webSocket: client,
+        headers: { "Sec-WebSocket-Protocol": "openquatt-tunnel.v1" }
+      });
     }
 
     if (!this.deviceWs || !this.isHandshaked) {
@@ -74,7 +89,7 @@ export class TunnelRegistry implements DurableObject {
     const payloadBytes = encoder.encode(reqHeadPayload);
 
     const frame = new Uint8Array(5 + payloadBytes.length);
-    frame[0] = 0x10; // REQ_HEAD index fix
+    frame[0] = 0x10; // REQ_HEAD
     
     const view = new DataView(frame.buffer);
     view.setUint32(1, streamId, false); // Big Endian
@@ -99,109 +114,108 @@ export class TunnelRegistry implements DurableObject {
     });
   }
 
-  private setupDeviceWebSocket() {
-    if (!this.deviceWs) return;
+  // ✅ HIBERNATION API EVENT HANDLERS (Vervangen addEventListener volledig)
 
-    this.deviceWs.accept();
-    this.deviceWs.addEventListener("message", async (event) => {
-      if (!(event.data instanceof ArrayBuffer)) {
-        this.deviceWs?.close(4003, "Protocol error: Text frame received");
-        return;
-      }
+  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
+    if (!(message instanceof ArrayBuffer)) {
+      ws.close(4003, "Protocol error: Text frame received");
+      return;
+    }
 
-      // Geïsoleerde byte parsing om byteOffset verschuivingen in V8 te elimineren
-      const rawBytes = new Uint8Array(event.data);
-      const frame = new Uint8Array(rawBytes); 
-      if (frame.length < 5) return;
+    // Geïsoleerde byte parsing om byteOffset-verschuivingen in de V8 engine te elimineren
+    const rawBytes = new Uint8Array(message);
+    const frame = new Uint8Array(rawBytes); 
+    if (frame.length < 5) return;
 
-      const type = frame[0]; // FIX: Type byte index 0
-      
-      const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
-      const streamId = view.getUint32(1, false);
-      const payload = frame.slice(5); 
+    const type = frame[0];
+    const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+    const streamId = view.getUint32(1, false);
+    const payload = frame.slice(5);
+    const decoder = new TextDecoder();
 
-      const decoder = new TextDecoder();
-
-      if (streamId === 0) {
-        if (type === 0x01) { // HELLO
-          try {
-            const helloData = JSON.parse(decoder.decode(payload));
-            if (helloData.v !== 1) {
-              this.deviceWs?.close(4002, "Unsupported protocol version");
-              return;
-            }
-
-            const ackPayload = new TextEncoder().encode(JSON.stringify({
-              v: 1,
-              max_frame: Math.min(helloData.max_frame, 4096),
-              max_streams: Math.min(helloData.max_streams, 2),
-              request_timeout_s: 10,
-              idle_timeout_s: 30,
-              ping_interval_s: 30
-            }));
-
-            const ackFrame = new Uint8Array(5 + ackPayload.length);
-            ackFrame[0] = 0x02; // HELLO_ACK index fix
-            new DataView(ackFrame.buffer).setUint32(1, 0, false);
-            ackFrame.set(ackPayload, 5);
-
-            this.deviceWs?.send(ackFrame);
-            this.isHandshaked = true;
-            console.log("🟢 [DURABLE OBJECT] Handshake succesvol voltooid met ESP32.");
-          } catch (e) {
-            this.deviceWs?.close(4003, "Malformed HELLO payload");
+    // Handshake afhandeling op stream 0
+    if (streamId === 0) {
+      if (type === 0x01) { // HELLO
+        try {
+          const helloData = JSON.parse(decoder.decode(payload));
+          if (helloData.v !== 1) {
+            ws.close(4002, "Unsupported protocol version");
+            return;
           }
-        }
-        return;
-      }
 
-      const activeReq = this.pendingRequests.get(streamId);
-      if (!activeReq) return;
+          const ackPayload = new TextEncoder().encode(JSON.stringify({
+            v: 1,
+            max_frame: Math.min(helloData.max_frame, 4096),
+            max_streams: Math.min(helloData.max_streams, 2),
+            request_timeout_s: 10,
+            idle_timeout_s: 30,
+            ping_interval_s: 30
+          }));
 
-      if (type === 0x20) { // RES_HEAD -> Resolven zodra de headers er zijn
-        try {
-          const resHead = JSON.parse(decoder.decode(payload));
-          
-          const headers = new Headers(resHead.h);
-          headers.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline';");
-          headers.set("X-Content-Type-Options", "nosniff");
-          headers.set("Referrer-Policy", "no-referrer");
-          headers.set("X-Frame-Options", "DENY");
+          const ackFrame = new Uint8Array(5 + ackPayload.length);
+          ackFrame[0] = 0x02; // HELLO_ACK
+          new DataView(ackFrame.buffer).setUint32(1, 0, false);
+          ackFrame.set(ackPayload, 5);
 
-          const response = new Response(activeReq.readable, {
-            status: resHead.s || 200,
-            headers: headers
-          });
-          
-          activeReq.resolve(response);
+          ws.send(ackFrame);
+          this.isHandshaked = true;
+          console.log("🟢 [DO] Handshake succesvol voltooid met ESP32.");
         } catch (e) {
-          this.deviceWs?.close(4003, "Malformed RES_HEAD payload");
+          ws.close(4003, "Malformed HELLO payload");
         }
-      } 
-      else if (type === 0x21) { // RES_BODY -> Schrijf chunks direct door naar de browser
-        try {
-          await activeReq.writer.write(payload);
-        } catch(e) {
-          this.pendingRequests.delete(streamId);
-        }
-      } 
-      else if (type === 0x22) { // RES_END -> Sluit de stream netjes af
-        this.pendingRequests.delete(streamId);
-        try {
-          await activeReq.writer.close();
-        } catch(e){}
       }
-      else if (type === 0x30) { // RESET
-        this.pendingRequests.delete(streamId);
-        try { await activeReq.writer.abort(); } catch(e){}
-        activeReq.resolve(new Response("Stream reset door device", { status: 502 }));
-      }
-    });
+      return;
+    }
 
-    this.deviceWs.addEventListener("close", () => {
-      this.deviceWs = null;
-      this.isHandshaked = false;
-      console.log("🔴 [DURABLE OBJECT] WebSocket verbinding gesloten door device.");
-    });
+    // Proxy stream-afhandeling voor actieve HTTP verzoeken
+    const activeReq = this.pendingRequests.get(streamId);
+    if (!activeReq) return;
+
+    if (type === 0x20) { // RES_HEAD -> Resolven zodra de headers binnen zijn
+      try {
+        const resHead = JSON.parse(decoder.decode(payload));
+        const headers = new Headers(resHead.h);
+        headers.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline';");
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Referrer-Policy", "no-referrer");
+        headers.set("X-Frame-Options", "DENY");
+        
+        const response = new Response(activeReq.readable, {
+          status: resHead.s || 200,
+          headers: headers
+        });
+        activeReq.resolve(response);
+      } catch (e) {
+        ws.close(4003, "Malformed RES_HEAD payload");
+      }
+    } 
+    else if (type === 0x21) { // RES_BODY -> Schrijf chunks direct door naar de browser stream
+      try {
+        await activeReq.writer.write(payload);
+      } catch(e) {
+        this.pendingRequests.delete(streamId);
+      }
+    } 
+    else if (type === 0x22) { // RES_END -> Sluit de browser streaming-pipe netjes af
+      this.pendingRequests.delete(streamId);
+      try { await activeReq.writer.close(); } catch(e){}
+    } 
+    else if (type === 0x30) { // RESET
+      this.pendingRequests.delete(streamId);
+      try { await activeReq.writer.abort(); } catch(e){}
+      activeReq.resolve(new Response("Stream reset door device", { status: 502 }));
+    }
+  }
+
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+    this.deviceWs = null;
+    this.isHandshaked = false;
+    console.log(`🔴 [DO] WebSocket gesloten: code=${code} reason=${reason}`);
+  }
+
+  async webSocketError(ws: WebSocket, error: unknown) {
+    console.error("🚨 [DO] WebSocket error:", error);
+    this.deviceWs = null;
+    this.isHandshaked = false;
   }
 }
