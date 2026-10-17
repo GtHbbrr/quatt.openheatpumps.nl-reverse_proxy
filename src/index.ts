@@ -214,7 +214,6 @@ export default {
         correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
         correctedHeaders.delete('Content-Encoding');
         correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
-        correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io/logo/logo-text-on-light.svg;");
 
         const rawBuffer = await doResponse.arrayBuffer();
         try {
@@ -258,6 +257,7 @@ export default {
         message: "ESP32 is verzoeken aan het verwerken, geduld...",
         entities: [],
         incidents: []
+        correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io/logo/logo-text-on-light.svg;");        
       }), {
         status: 200, // We veinzen een 200 zodat de UI stabiel blijft draaien tijdens de herstart van de ESP32
         headers: { "Content-Type": "application/json" }
