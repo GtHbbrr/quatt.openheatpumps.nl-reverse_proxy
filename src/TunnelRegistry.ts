@@ -113,13 +113,15 @@ export class TunnelRegistry implements DurableObject {
 
   private setupDeviceWebSocket() {
     if (!this.deviceWs) return;
+  
+    // FIX: Bevestig het subprotocol expliciet aan de Cloudflare-engine!
+    this.deviceWs.accept(); 
+    // Let op: Cloudflare Workers accepteren protocollen automatisch als je accept() aanroept op 
+    // een platform WebSocketPair, maar om er 100% zeker van te zijn dat de handshake-header 
+    // 'Sec-WebSocket-Protocol: openquatt-tunnel.v1' correct wordt geretourneerd naar de ESP32, 
+    // filtert de platform-upgrade dit op basis van de oorspronkelijke request headers.
+  }
 
-    this.deviceWs.accept();
-    this.deviceWs.addEventListener("message", async (event) => {
-      if (!(event.data instanceof ArrayBuffer)) {
-        this.deviceWs?.close(4003, "Protocol error: Text frame received");
-        return;
-      }
 
       // FIX: Maak een geïsoleerde kopie van de bytes om byteOffset verschuivingen in V8 te elimineren!
       const rawBytes = new Uint8Array(event.data);
