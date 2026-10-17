@@ -195,25 +195,34 @@ export default {
     }
 
     const cookieHeader = request.headers.get("Cookie") || "";
-    const cookies = parseCookies(cookieHeader);
-    const secret = cookies["oq_pump"];
     
-    if (!secret) {
-      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie mist.");
-      return new Response("Unauthorized: Missing session cookie", { status: 401 });
+    // ✅ ROBUUSTE REGEX FIX: Zoek doelgericht naar de exacte oq_pump cookie-waarde
+    const cookieMatch = cookieHeader.match(/(?:^|; )oq_pump=([^;]*)/);
+    const secret = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+    
+    if (!secret || secret === "—" || secret.trim() === "") {
+      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie ontbreekt of is corrupt.");
+      return new Response("Unauthorized: Missing or invalid session cookie", { status: 401 });
     }
     
+    // Genereer de hash-routing ID op basis van het correct uitgepakte geheim
     const routeId = await computeRouteId(secret);
+    
+    // Toon de subasset-routering in de logs om de DO-aanroep zwart-op-wit te bewijzen
+    console.log(`✈️ [PROXY ROUTE] Subasset ${url.pathname} doorzetten naar RouteId: ${routeId}`);
+
     const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
       return await stub.fetch(request);
     } catch (doError: any) {
+      console.error("🚨 [PROXY CRASH] Fout tijdens subasset proxy-fetch:", doError.message);
       return new Response(JSON.stringify({ error: doError.message }), { status: 502 });
     }
   }
 };
+
 
 async function computeRouteId(secret: string): Promise<string> {
   const encoder = new TextEncoder();
