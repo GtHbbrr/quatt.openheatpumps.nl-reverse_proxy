@@ -13,25 +13,42 @@ export default {
     // WIRE PROTOCOL V2.0: DEVICE INGRESS HANDLING (PRODUCTION RELAY)
     // ==============================================================================
     if (url.pathname === "/device") {
-      const queryToken = url.searchParams.get("token");
-      const authHeader = request.headers.get("Authorization")?.replace("Bearer ", "");
-      const pumpSecret = queryToken || authHeader;
-
-      if (!pumpSecret) {
-        console.error("🚨 [WORKER REJECT] Ingress geweigerd: Geen token gevonden.");
-        return new Response("Unauthorized: Missing token parameter", { status: 401 });
-      }
-
-      console.log("🟢 [WORKER INGRESS] WebSocket handdruk doorzetten voor token:", pumpSecret);
-      const routeId = await computeRouteId(pumpSecret);
-
-      const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
-      const stub = env.TUNNEL_REGISTRY.get(doId);
-
-      // FIX: Stuur het originele request object direct ongewijzigd door om de platform WebSocket Upgrade te beschermen!
-      return await stub.fetch(request);
+        // 1. Valideer Upgrade header (verplicht volgens Cloudflare docs)
+        const upgradeHeader = request.headers.get("Upgrade");
+        if (!upgradeHeader || upgradeHeader !== "websocket") {
+            console.error("🚨 [WORKER REJECT] Geen WebSocket Upgrade header gevonden.");
+            return new Response("Expected WebSocket Upgrade", { status: 426 });
+        }
+    
+        // 2. Token extractie
+        const queryToken = url.searchParams.get("token");
+        const authHeader = request.headers.get("Authorization")?.replace("Bearer ", "");
+        const pumpSecret = queryToken || authHeader;
+    
+        if (!pumpSecret) {
+            console.error("🚨 [WORKER REJECT] Geen token gevonden.");
+            return new Response("Unauthorized: Missing token parameter", { status: 401 });
+        }
+    
+        console.log("🟢 [WORKER INGRESS] WebSocket upgrade doorzetten voor token:", pumpSecret);
+        const routeId = await computeRouteId(pumpSecret);
+        const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
+        const stub = env.TUNNEL_REGISTRY.get(doId);
+    
+        // 3. Try-catch zodat fouten zichtbaar worden in plaats van 503
+        try {
+            return await stub.fetch(request);
+        } catch (err) {
+            console.error("🚨 [WORKER] Durable Object fout:", err.message, err.stack);
+            return new Response(JSON.stringify({ 
+                error: "DO fetch failed", 
+                detail: err.message 
+            }), { 
+                status: 502, 
+                headers: { "Content-Type": "application/json" } 
+            });
+        }
     }
-
 
     // ==============================================================================
     // 2. PAIRING FLOW HTML VIEW (Vangt de # hash-prikkel client-side op!)
