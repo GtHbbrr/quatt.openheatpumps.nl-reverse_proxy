@@ -1,31 +1,48 @@
 import { DurableObject } from "cloudflare:workers";
 
+interface WebSocketState {
+  handshaked: boolean;
+}
+
 export class TunnelRegistry extends DurableObject {
-  private deviceWs: WebSocket | null = null;
   private nextStreamId = 1;
   private pendingRequests = new Map<number, { 
     writer: WritableStreamDefaultWriter; 
     resolve: (res: Response) => void; 
     readable: ReadableStream;
   }>();
-  private isHandshaked = false;
 
   constructor(ctx: DurableObjectState, env: any) {
     super(ctx, env);
   }
 
+  // ✅ HIBERNATION-SAFE STATE EXTRACTION
+  // Haalt de actieve WebSocket op en valideert de status via Cloudflare attachments
+  private getDeviceWs(): WebSocket | null {
+    const sockets = this.ctx.getWebSockets();
+    for (const ws of sockets) {
+      try {
+        const att = ws.deserializeAttachment() as WebSocketState | null;
+        if (att && att.handshaked) return ws;
+      } catch (e) {
+        // Mislukte deserialisatie negeren
+      }
+    }
+    return null;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WIRE PROTOCOL V2.0: REAL-TIME HEALTH STATUS ROUTE
+    // ── Health check (Wacht maximaal 3 seconden op de C++ HELLO handshake) ──
     if (url.pathname === "/device/check") {
       for (let i = 0; i < 30; i++) {
-        if (this.deviceWs && this.isHandshaked) break;
+        if (this.getDeviceWs()) break;
         await new Promise(r => setTimeout(r, 100));
       }
-
-      const isOnline = this.deviceWs !== null && this.isHandshaked;
-      console.log(`• [DURABLE OBJECT STATUS] Live controle uitgevoerd. Status operationeel: ${isOnline}`);
+      const ws = this.getDeviceWs();
+      const isOnline = ws !== null;
+      console.log(`• [DO STATUS] Live controle. Operationeel: ${isOnline}`);
       
       if (!isOnline) {
         return new Response("Device Offline of TLS Handshake incompleet", { status: 503 });
@@ -34,50 +51,44 @@ export class TunnelRegistry extends DurableObject {
     }
 
     if (url.pathname === "/status") {
-      return new Response(this.deviceWs && this.isHandshaked ? "online" : "offline", {
-        status: this.deviceWs && this.isHandshaked ? 200 : 503
+      const ws = this.getDeviceWs();
+      return new Response(ws ? "online" : "offline", {
+        status: ws ? 200 : 503
       });
     }
 
-    // ✅ DEBUG VERSIE: WebSocket upgrade-aanvraag met try-catch en stap-voor-stap logging
+    // ── WebSocket upgrade voor de ESP32 ──
     if (url.pathname === "/device") {
       console.log("🟢 [DO] /device WebSocket upgrade ontvangen.");
-
       try {
         const [client, server] = Object.values(new WebSocketPair());
         console.log("✅ [DO] WebSocketPair gemaakt.");
-        
-        if (this.deviceWs) {
-          try { this.deviceWs.close(4000, "Replaced by newer connection"); } catch(e){}
+
+        // Sluit eventuele achtergebleven zombietunnels binnen deze DO context
+        const existing = this.ctx.getWebSockets();
+        for (const oldWs of existing) {
+          try { oldWs.close(4000, "Replaced by newer connection"); } catch(e){}
         }
 
-        this.deviceWs = server;
-        this.isHandshaked = false;
-
+        // ✅ HIBERNATION STATE INITIALISATIE
+        server.serializeAttachment({ handshaked: false });
         this.ctx.acceptWebSocket(server);
         console.log("✅ [DO] acceptWebSocket aangeroepen.");
 
-        // We laten de Sec-WebSocket-Protocol weg conform AI advies om runtime-interferentie te uitsluiten
-        return new Response(null, { 
-          status: 101, 
-          webSocket: client
-        });
+        return new Response(null, { status: 101, webSocket: client });
       } catch (err: any) {
         console.error("🚨 [DO] WebSocket upgrade fout:", err.message, err.stack);
-        return new Response(JSON.stringify({ 
-          error: "WebSocket upgrade failed", 
-          detail: err.message 
-        }), { 
-          status: 502, 
-          headers: { "Content-Type": "application/json" } 
+        return new Response(JSON.stringify({ error: err.message }), { 
+          status: 502, headers: { "Content-Type": "application/json" } 
         });
       }
     }
 
-    if (!this.deviceWs || !this.isHandshaked) {
+    // ── Stateless HTTP proxy naar device ──
+    const deviceWs = this.getDeviceWs();
+    if (!deviceWs) {
       return new Response(JSON.stringify({ error: "Durable Object Ingress Handshake Incomplete" }), { 
-        status: 503, 
-        headers: { "Content-Type": "application/json" } 
+        status: 503, headers: { "Content-Type": "application/json" } 
       });
     }
 
@@ -97,33 +108,31 @@ export class TunnelRegistry extends DurableObject {
 
     const encoder = new TextEncoder();
     const payloadBytes = encoder.encode(reqHeadPayload);
-
     const frame = new Uint8Array(5 + payloadBytes.length);
     frame[0] = 0x10; // REQ_HEAD
-    
     const view = new DataView(frame.buffer);
     view.setUint32(1, streamId, false);
     frame.set(payloadBytes, 5);
 
-    this.deviceWs.send(frame);
+    deviceWs.send(frame);
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
 
     return new Promise<Response>((resolve) => {
       this.pendingRequests.set(streamId, { writer, resolve, readable });
-
       setTimeout(() => {
         if (this.pendingRequests.has(streamId)) {
           this.pendingRequests.delete(streamId);
           try { writer.abort("Gateway Timeout"); } catch(e){}
-          resolve(new Response("Gateway Timeout (ESP32 reageerde niet binnen 10s)", { status: 544 }));
+          resolve(new Response("Gateway Timeout", { status: 544 }));
         }
       }, 10000);
     });
   }
 
-  // HIBERNATION API EVENT HANDLERS
+  // ── HIBERNATION API EVENT HANDLERS ──
+
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
     if (!(message instanceof ArrayBuffer)) {
       ws.close(4003, "Protocol error: Text frame received");
@@ -131,7 +140,7 @@ export class TunnelRegistry extends DurableObject {
     }
 
     const rawBytes = new Uint8Array(message);
-    const frame = new Uint8Array(rawBytes); 
+    const frame = new Uint8Array(rawBytes);
     if (frame.length < 5) return;
 
     const type = frame[0];
@@ -140,6 +149,7 @@ export class TunnelRegistry extends DurableObject {
     const payload = frame.slice(5);
     const decoder = new TextDecoder();
 
+    // ── Binaire handshake op stream 0 ──
     if (streamId === 0) {
       if (type === 0x01) { // HELLO
         try {
@@ -164,8 +174,10 @@ export class TunnelRegistry extends DurableObject {
           ackFrame.set(ackPayload, 5);
 
           ws.send(ackFrame);
-          this.isHandshaked = true;
-          console.log("🟢 [DO] Handshake succesvol voltooid met ESP32.");
+
+          // ✅ PERSIST STATE IN ATTACHMENT: Overleeft V8 memory hibernation!
+          ws.serializeAttachment({ handshaked: true });
+          console.log("🟢 [DO] Handshake succesvol voltooid en opgeslagen in attachment.");
         } catch (e) {
           ws.close(4003, "Malformed HELLO payload");
         }
@@ -173,10 +185,11 @@ export class TunnelRegistry extends DurableObject {
       return;
     }
 
+    // ── Binaire HTTP proxy data streaming back to browser ──
     const activeReq = this.pendingRequests.get(streamId);
     if (!activeReq) return;
 
-    if (type === 0x20) { // RES_HEAD
+    if (type === 0x20) { // RES_HEAD -> Response stream openen
       try {
         const resHead = JSON.parse(decoder.decode(payload));
         const headers = new Headers(resHead.h);
@@ -185,23 +198,22 @@ export class TunnelRegistry extends DurableObject {
         headers.set("Referrer-Policy", "no-referrer");
         headers.set("X-Frame-Options", "DENY");
         
-        const response = new Response(activeReq.readable, {
-          status: resHead.s || 200,
-          headers: headers
-        });
-        activeReq.resolve(response);
+        activeReq.resolve(new Response(activeReq.readable, {
+          status: resHead.s || 200, 
+          headers
+        }));
       } catch (e) {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
     } 
-    else if (type === 0x21) { // RES_BODY
-      try {
-        await activeReq.writer.write(payload);
-      } catch(e) {
-        this.pendingRequests.delete(streamId);
+    else if (type === 0x21) { // RES_BODY -> Pomp binaire chunks door
+      try { 
+        await activeReq.writer.write(payload); 
+      } catch(e) { 
+        this.pendingRequests.delete(streamId); 
       }
     } 
-    else if (type === 0x22) { // RES_END
+    else if (type === 0x22) { // RES_END -> Sluit streaming pipe
       this.pendingRequests.delete(streamId);
       try { await activeReq.writer.close(); } catch(e){}
     } 
@@ -213,14 +225,6 @@ export class TunnelRegistry extends DurableObject {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    this.deviceWs = null;
-    this.isHandshaked = false;
     console.log(`🔴 [DO] WebSocket gesloten: code=${code} reason=${reason}`);
-  }
-
-  async webSocketError(ws: WebSocket, error: unknown) {
-    console.error("🚨 [DO] WebSocket error:", error);
-    this.deviceWs = null;
-    this.isHandshaked = false;
   }
 }
