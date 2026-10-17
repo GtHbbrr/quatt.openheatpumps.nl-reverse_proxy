@@ -199,14 +199,8 @@ export default {
     const secret = cookies["oq_pump"];
     
     if (!secret) {
-      const debugHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head><title>OpenQuatt Proxy Debug</title></head>
-        <body><div style="font-family:sans-serif;padding:20px;">🔒 Toegang Geweigerd (401 Unauthorized)</div></body>
-        </html>
-      `;
-      return new Response(debugHtml, { status: 401, headers: { "Content-Type": "text/html" } });
+      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie mist.");
+      return new Response("Unauthorized: Missing session cookie", { status: 401 });
     }
     
     const routeId = await computeRouteId(secret);
