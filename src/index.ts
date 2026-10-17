@@ -233,28 +233,55 @@ export default {
         }
       }
 
-      // 2. PROTECTIE VOOR HET AGRESSIEVE POLLEN VAN ENTITEITEN EN LOGS
+      // ==============================================================================
+      // 2. AGGRESSIEVE VERKEERSREGELAAR VOOR LIVE API DATA (Ontlast de ESP32)
+      // ==============================================================================
       if (url.pathname.includes('/openquatt/')) {
-        await new Promise(resolve => setTimeout(resolve, 50)); // Korte debounce delay
+        // We verdelen de verzoeken strategisch op basis van het subpad om de queue te spreiden
+        if (url.pathname.endsWith('entities')) {
+          // Geef entiteiten de hoogste prioriteit, maar met een minimale spreiding
+          await new Promise(resolve => setTimeout(resolve, 30));
+        } else if (url.pathname.endsWith('logs') || url.pathname.endsWith('recent')) {
+          // Logs zijn bizar zwaar voor de flash/SRAM van de ESP32. Vertraag deze bewust met 450ms.
+          // Hierdoor krijgt de entiteiten-stroom altijd voorrang!
+          await new Promise(resolve => setTimeout(resolve, 450));
+        } else {
+          // Overige polling requests (zoals status/incidents) krijgen een milde vertraging
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
       }
 
-      // 3. Voer het verzoek uit naar de ESP32 via het Durable Object
-      const doResponse = await stub.fetch(request);
+      // ==============================================================================
+      // 3. DOORGEVEN NAAR DURABLE OBJECT MET TIMEOUT SAFETY
+      // ==============================================================================
+      // We bouwen een race in Cloudflare: als de ESP32 niet binnen 2.5 seconden antwoordt,
+      // breekt Cloudflare het verzoek netjes af met een fallback, zodat de tunnel open blijft.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
 
-      if (doResponse.status === 503 || doResponse.status === 502) {
-        throw new Error("ESP32_BUSY");
+      try {
+        const doResponse = await stub.fetch(request, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (doResponse.status === 503 || doResponse.status === 502) {
+          throw new Error("ESP32_BUSY");
+        }
+
+        // ✅ REPARATIE & IMPLEMENTATIE: Bouw hier de headers op voor de HTML pagina en API calls
+        const generalHeaders = new Headers(doResponse.headers);
+        generalHeaders.set('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;");
+
+        // Stuur de response netjes terug inclusief de CSP header
+        return new Response(doResponse.body, {
+          status: doResponse.status,
+          statusText: doResponse.statusText,
+          headers: generalHeaders
+        });
+
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        throw fetchError;
       }
-
-      // ✅ REPARATIE & IMPLEMENTATIE: Bouw hier de headers op voor de HTML pagina en API calls
-      const generalHeaders = new Headers(doResponse.headers);
-      generalHeaders.set('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;");
-
-      // Stuur de response netjes terug inclusief de CSP header
-      return new Response(doResponse.body, {
-        status: doResponse.status,
-        statusText: doResponse.statusText,
-        headers: generalHeaders
-      });
       
     } catch (doError: any) {
       console.warn("⚠️ [TUNNEL BUSY] ESP32 is overbelast of offline. Stuur rustige fallback.", doError.message);
