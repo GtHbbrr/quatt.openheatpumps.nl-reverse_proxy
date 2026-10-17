@@ -204,38 +204,40 @@ export class TunnelRegistry extends DurableObject {
     if (type === 0x20) { // RES_HEAD -> Response stream openen voor de browser
       try {
         const resHead = JSON.parse(decoder.decode(payload));
-        const responseHeaders = new Headers();
         
-        // 1. Kopieer handmatig de originele headers van de ESP32 naar de schone Headers klasse
+        // 1. Bouw de headers op als een plat, statisch JavaScript object (Verplicht voor V8 Streaming Response compliance!)
+        const plainHeaders: Record<string, string> = {};
+        
         if (resHead.h) {
           for (const [key, value] of Object.entries(resHead.h)) {
-            responseHeaders.set(key, value as string);
+            plainHeaders[key.toLowerCase()] = value as string;
           }
         }
         
-        // 2. Fallback: Als er om wat voor reden dan ook geen content-type is meegegeven, zet hem op text/html
-        if (!responseHeaders.has("content-type")) {
-          responseHeaders.set("content-type", "text/html; charset=utf-8");
+        // 2. Fallback: Garandeer dat er altijd een Content-Type aanwezig is
+        if (!plainHeaders["content-type"]) {
+          plainHeaders["content-type"] = "text/html; charset=utf-8";
         }
         
-        // 3. Voeg de vereiste security- en streaming-headers toe voor iOS/Safari compliance
-        responseHeaders.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline';");
-        responseHeaders.set("X-Content-Type-Options", "nosniff");
-        responseHeaders.set("Referrer-Policy", "no-referrer");
-        responseHeaders.set("X-Frame-Options", "DENY");
-        
-        // Dwing chunked transfer af zodat Safari weet dat het om een real-time binaire stream gaat
-        responseHeaders.set("Transfer-Encoding", "chunked");
+        // 3. Voeg de vereiste security- en transfer-headers expliciet toe
+        plainHeaders["content-security-policy"] = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline';";
+        plainHeaders["x-content-type-options"] = "nosniff";
+        plainHeaders["referrer-policy"] = "no-referrer";
+        plainHeaders["x-frame-options"] = "DENY";
+        plainHeaders["transfer-encoding"] = "chunked"; // Dwing iOS Safari tot real-time chunked verwerking
 
-        // Los de promise in met de herziene responseHeaders structuur
-        activeReq.resolve(new Response(activeReq.readable, {
+        // 4. Los de promise in via de correcte Cloudflare Response structuur
+        const response = new Response(activeReq.readable, {
           status: resHead.s || 200, 
-          headers: responseHeaders
-        }));
+          headers: plainHeaders // <-- GECORRIGEERD: Plat object meegegeven
+        });
+        
+        activeReq.resolve(response);
       } catch (e) {
         ws.close(4003, "Malformed RES_HEAD payload");
       }
-    } 
+    }
+
 
     else if (type === 0x21) { // RES_BODY
       try { 
