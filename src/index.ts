@@ -30,15 +30,19 @@ export default {
             return new Response("Unauthorized: Missing token parameter", { status: 401 });
         }
     
-        console.log("🟢 [WORKER INGRESS] WebSocket upgrade doorzetten voor token:", pumpSecret);
         const routeId = await computeRouteId(pumpSecret);
+
+        // ✅ AI DEBUG LOGS: Toon het token en de berekende hash van de inkomende ESP32
+        console.log(`🔍 [DEVICE] ESP32 token: ${pumpSecret}`);
+        console.log(`🔍 [DEVICE] RouteId: ${routeId}`);
+
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
     
         // 3. Try-catch zodat fouten zichtbaar worden in plaats van 503
         try {
             return await stub.fetch(request);
-        } catch (err) {
+        } catch (err: any) {
             console.error("🚨 [WORKER] Durable Object fout:", err.message, err.stack);
             return new Response(JSON.stringify({ 
                 error: "DO fetch failed", 
@@ -104,7 +108,6 @@ export default {
             </div>
           </div>
           <script>
-            // Dit draait in de browser en kan de hashtag wél lezen!
             const secret = window.location.hash.substring(1);
             if (!secret) {
               document.getElementById("step-hash").className = "step fail";
@@ -145,7 +148,6 @@ export default {
       `;
       return new Response(html, { headers: { "Content-Type": "text/html" } });
     }
-
     // ==============================================================================
     // 3. API ENDPOINT OM DE HANDSHAKE VIA HET DURABLE OBJECT TE CONTROLEREN
     // ==============================================================================
@@ -157,6 +159,11 @@ export default {
         }
 
         const routeId = await computeRouteId(body.secret);
+
+        // ✅ AI DEBUG LOGS: Toon het token en de berekende hash van de browseraanvraag
+        console.log(`🔍 [API/PAIR] Browser token: ${body.secret}`);
+        console.log(`🔍 [API/PAIR] RouteId: ${routeId}`);
+
         const doId = env.TUNNEL_REGISTRY.idFromName(routeId);
         const stub = env.TUNNEL_REGISTRY.get(doId);
         
