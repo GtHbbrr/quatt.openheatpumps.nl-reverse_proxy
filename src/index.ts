@@ -178,7 +178,8 @@ export default {
         return new Response(JSON.stringify({ success: true }), {
           headers: {
             "Content-Type": "application/json",
-            "Set-Cookie": `oq_pump=${body.secret}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`
+            // GECORRIGEERD: SameSite=Lax is verplicht voor subrequests (CSS/JS) via proxy-tunnels!
+            "Set-Cookie": `oq_pump=${body.secret}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=31536000`
           }
         });
       } catch (e: any) {
