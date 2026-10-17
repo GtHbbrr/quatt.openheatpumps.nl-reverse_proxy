@@ -247,7 +247,8 @@ export default {
       }
 
       return doResponse;
-
+      correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io/logo/logo-text-on-light.svg;"); 
+      
     } catch (doError: any) {
       console.warn("⚠️ [TUNNEL BUSY] ESP32 is overbelast of offline. Stuur rustige fallback.", doError.message);
       
@@ -256,8 +257,7 @@ export default {
         status: "tunnel_throttled", 
         message: "ESP32 is verzoeken aan het verwerken, geduld...",
         entities: [],
-        incidents: []
-        correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io/logo/logo-text-on-light.svg;");        
+        incidents: []       
       }), {
         status: 200, // We veinzen een 200 zodat de UI stabiel blijft draaien tijdens de herstart van de ESP32
         headers: { "Content-Type": "application/json" }
