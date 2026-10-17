@@ -214,6 +214,9 @@ export default {
         correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
         correctedHeaders.delete('Content-Encoding');
         correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
+        
+        // Pas hier ook direct de CSP toe voor de assets
+        correctedHeaders.set('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;");
 
         const rawBuffer = await doResponse.arrayBuffer();
         try {
@@ -231,44 +234,46 @@ export default {
       }
 
       // 2. PROTECTIE VOOR HET AGRESSIEVE POLLEN VAN ENTITEITEN EN LOGS
-      // Als de browser binnen 1.5 seconde nóg een keer om dezelfde live-data vraagt, 
-      // sturen we het verzoek NIET door naar de ESP32 om crashes te voorkomen.
       if (url.pathname.includes('/openquatt/')) {
-        // Geef de ESP32 een kleine adempauze door fetches naar live data te throttlen
         await new Promise(resolve => setTimeout(resolve, 50)); // Korte debounce delay
       }
 
       // 3. Voer het verzoek uit naar de ESP32 via het Durable Object
       const doResponse = await stub.fetch(request);
 
-      // Als de ESP32 intern bezet is en een fout geeft, vertaal dit naar een milde status
       if (doResponse.status === 503 || doResponse.status === 502) {
         throw new Error("ESP32_BUSY");
       }
 
-      return doResponse;
-      correctedHeaders.set('Content-Security-Policy',"default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io/logo/logo-text-on-light.svg;"); 
+      // ✅ REPARATIE & IMPLEMENTATIE: Bouw hier de headers op voor de HTML pagina en API calls
+      const generalHeaders = new Headers(doResponse.headers);
+      generalHeaders.set('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;");
+
+      // Stuur de response netjes terug inclusief de CSP header
+      return new Response(doResponse.body, {
+        status: doResponse.status,
+        statusText: doResponse.statusText,
+        headers: generalHeaders
+      });
       
     } catch (doError: any) {
       console.warn("⚠️ [TUNNEL BUSY] ESP32 is overbelast of offline. Stuur rustige fallback.", doError.message);
       
-      // Milde JSON fallback zodat de browser-applicatie niet vastloopt bij een haperende tunnel
       return new Response(JSON.stringify({ 
         status: "tunnel_throttled", 
         message: "ESP32 is verzoeken aan het verwerken, geduld...",
         entities: [],
         incidents: []       
       }), {
-        status: 200, // We veinzen een 200 zodat de UI stabiel blijft draaien tijdens de herstart van de ESP32
-        headers: { "Content-Type": "application/json" }
+        status: 200, 
+        headers: { 
+          "Content-Type": "application/json",
+          "Content-Security-Policy": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https://media.esphome.io;"
+        }
       });
     }
-
-
   }
 };
-
-
 
 async function computeRouteId(secret: string): Promise<string> {
   const encoder = new TextEncoder();
