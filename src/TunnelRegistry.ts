@@ -201,11 +201,13 @@ export class TunnelRegistry extends DurableObject {
     const activeReq = this.pendingRequests.get(streamId);
     if (!activeReq) return;
 
-    if (type === 0x20) { // RES_HEAD
+    if (type === 0x20) { // RES_HEAD -> Response stream openen voor de browser
       try {
         const resHead = JSON.parse(decoder.decode(payload));
         const headers = new Headers(resHead.h);
-        headers.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline';");
+        
+        // GECORRIGEERDE CSP-HEADER: Geef de OpenQuatt SPA de ruimte om JavaScript en stijlen uit te voeren
+        headers.set("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; connect-src 'self' wss:; img-src 'self' data:;");
         headers.set("X-Content-Type-Options", "nosniff");
         headers.set("Referrer-Policy", "no-referrer");
         headers.set("X-Frame-Options", "DENY");
