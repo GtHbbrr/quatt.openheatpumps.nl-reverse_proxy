@@ -188,18 +188,18 @@ export default {
     }
 
     // ==============================================================================
-    // 4. NORMAAL BROWSERBEZOEK (Server-side herstel - 0% ESP32 overhead)
+    // 4. NORMAAL BROWSERBEZOEK (Staat alle HTTP-methodes toe zoals POST/PUT voor API's)
     // ==============================================================================
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      return new Response("Method Not Allowed", { status: 405 });
-    }
+    // ✅ HOOGSTE PRIORITEIT FIX: Blokkeer geen POST/PUT/PATCH verzoeken meer!
+    // OpenQuatt gebruikt POST/PUT voor live data-updates op /openquatt/entities.
 
     const cookieHeader = request.headers.get("Cookie") || "";
     const cookieMatch = cookieHeader.match(/(?:^|; )oq_pump=([^;]*)/);
     const secret = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
     
     if (!secret || secret === "—" || secret.trim() === "") {
-      return new Response("Unauthorized", { status: 401 });
+      console.error("🚨 [PROXY REJECT] Subrequest geweigerd: oq_pump cookie ontbreekt of is corrupt.");
+      return new Response("Unauthorized: Missing or invalid session cookie", { status: 401 });
     }
     
     const routeId = await computeRouteId(secret);
@@ -207,29 +207,25 @@ export default {
     const stub = env.TUNNEL_REGISTRY.get(doId);
     
     try {
+      // Stuur het verzoek (inclusief POST body of PUT methode) 1-op-1 door naar het Durable Object
       const doResponse = await stub.fetch(request);
       const correctedHeaders = new Headers(doResponse.headers);
 
       if (url.pathname.endsWith('.css') || url.pathname.endsWith('.js')) {
         correctedHeaders.set('Content-Type', url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8');
         
-        // We halen de gzip-compressie er in Cloudflare volledig vanaf om de browser te redden!
         correctedHeaders.delete('Content-Encoding');
         correctedHeaders.set('Cache-Control', 'public, max-age=31536000, no-transform');
 
-        // Haal de rauwe binaire data binnen in Cloudflare
         const rawBuffer = await doResponse.arrayBuffer();
 
         try {
-          // We jagen de mogelijk corrupte binaire bytes door Cloudflare's decompressor
           const decompressor = new DecompressionStream("gzip");
           const writer = decompressor.writable.getWriter();
           writer.write(rawBuffer);
           writer.close();
 
           const textResponse = await new Response(decompressor.readable).text();
-
-          // Herbereken de exacte content-length van de schone, uitgepakte tekst
           correctedHeaders.set('Content-Length', new TextEncoder().encode(textResponse).length.toString());
 
           return new Response(textResponse, {
@@ -237,9 +233,6 @@ export default {
             headers: correctedHeaders
           });
         } catch (decompressionError) {
-          // FALLBACK: Als de stream zo corrupt is dat zelfs Cloudflare weigert,
-          // probeer hem dan als rauwe tekst te serveren zodat we de fout in de console zien
-          console.error("🚨 [WORKER] Gzip decompressie mislukt onderweg:", decompressionError);
           const decoder = new TextDecoder("utf-8", { fatal: false });
           const lossyText = decoder.decode(rawBuffer);
           
@@ -250,6 +243,7 @@ export default {
         }
       }
 
+      // Geef reguliere API responses (zoals de entiteiten) direct en ongewijzigd terug
       return doResponse;
 
     } catch (doError: any) {
